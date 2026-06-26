@@ -143,7 +143,7 @@ function initDragDrop(boardId) {
       conRenderBoard();
       if (typeof renderJobsBoard === 'function') renderJobsBoard();
       // Persist to Firestore
-      conDb.collection('jobs').doc(jobId).update({
+      coll('jobs').doc(jobId).update({
         status: newStatus,
         statusDate: new Date().toISOString().split('T')[0],
         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -413,6 +413,19 @@ const CON_APPROVED_EMAILS = [];
 
 let conApp = null, conDb = null, conAuth = null;
 let conCurrentUser = null;
+let currentCompanyId = null; // Set after login — all Firestore paths scoped under companies/{currentCompanyId}/
+
+
+// Helper: add companyId to any subcollection document
+function subDoc(data) {
+  return { ...data, companyId: currentCompanyId };
+}
+
+// Helper: returns a Firestore CollectionReference scoped to the current company
+function coll(name) {
+  if (!currentCompanyId) throw new Error('No company loaded — cannot access collection: ' + name);
+  return conDb.collection('companies').doc(currentCompanyId).collection(name);
+}
 let conCurrentJobId = null;
 let conEditingJobId = null;
 let conJobs = [];
@@ -530,7 +543,7 @@ function saveJob() {
   };
 
   if (conEditingJobId) {
-    conDb.collection('jobs').doc(conEditingJobId).update(data)
+    coll('jobs').doc(conEditingJobId).update(data)
       .then(() => kClose('newJobModal'))
       .catch(e => alert('Error saving: ' + e.message));
   } else {
@@ -538,7 +551,7 @@ function saveJob() {
     data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
     data.createdBy = conCurrentUser ? conCurrentUser.email : 'unknown';
     data.actualCost = 0;
-    conDb.collection('jobs').add(data)
+    coll('jobs').add(data)
       .then(() => kClose('newJobModal'))
       .catch(e => alert('Error saving: ' + e.message));
   }
@@ -717,7 +730,7 @@ function editCurrentJob() {
 function saveActualCost() {
   if (!conCurrentJobId || !conDb) return;
   const val = parseFloat(document.getElementById('actualCostInput').value) || 0;
-  conDb.collection('jobs').doc(conCurrentJobId).update({ actualCost: val, updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+  coll('jobs').doc(conCurrentJobId).update({ actualCost: val, updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
     .then(() => {
       const job = conJobs.find(j => j.id === conCurrentJobId);
       if (job) { job.actualCost = val; openJobDetail(conCurrentJobId); }
@@ -730,7 +743,7 @@ let conPhases = [];
 
 function conLoadPhases(jobId) {
   if (!conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('phases').orderBy('startDate').onSnapshot(snap => {
+  coll('jobs').doc(jobId).collection('phases').orderBy('startDate').onSnapshot(snap => {
     conPhases = [];
     snap.forEach(doc => conPhases.push({ id: doc.id, ...doc.data() }));
     renderPhaseList();
@@ -777,19 +790,19 @@ function savePhase() {
     status: document.getElementById('phaseStatus').value,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  conDb.collection('jobs').doc(conCurrentJobId).collection('phases').add(data)
+  coll('jobs').doc(conCurrentJobId).collection('phases').add(subDoc(data))
     .then(() => { kClose('addPhaseModal'); switchDetailTab('phases', null); })
     .catch(e => alert('Error: ' + e.message));
 }
 
 function updatePhaseStatus(phaseId, status) {
   if (!conCurrentJobId || !conDb) return;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('phases').doc(phaseId).update({ status });
+  coll('jobs').doc(conCurrentJobId).collection('phases').doc(phaseId).update({ status });
 }
 
 function deletePhase(phaseId) {
   if (!confirm('Delete this phase?')) return;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('phases').doc(phaseId).delete();
+  coll('jobs').doc(conCurrentJobId).collection('phases').doc(phaseId).delete();
 }
 
 // ── Daily Logs ──
@@ -797,7 +810,7 @@ let conLogs = [];
 
 function conLoadLogs(jobId) {
   if (!conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('logs').orderBy('date','desc').onSnapshot(snap => {
+  coll('jobs').doc(jobId).collection('logs').orderBy('date','desc').onSnapshot(snap => {
     conLogs = [];
     snap.forEach(doc => conLogs.push({ id: doc.id, ...doc.data() }));
     renderLogList();
@@ -826,14 +839,14 @@ function saveLog() {
     createdBy: conCurrentUser ? conCurrentUser.email : 'unknown',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  conDb.collection('jobs').doc(conCurrentJobId).collection('logs').add(data)
+  coll('jobs').doc(conCurrentJobId).collection('logs').add(subDoc(data))
     .then(() => { kClose('addLogModal'); switchDetailTab('logs', null); })
     .catch(e => alert('Error: ' + e.message));
 }
 
 function deleteLog(logId) {
   if (!confirm('Delete this log entry?')) return;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('logs').doc(logId).delete();
+  coll('jobs').doc(conCurrentJobId).collection('logs').doc(logId).delete();
 }
 
 // ── UI helpers ──
@@ -1198,14 +1211,14 @@ let _jcdEstCache = {}; // { jobId: { category: estTotal } }
 function loadJobCostActuals(jobId, callback) {
   if (!conDb) { if(callback) callback(); return; }
   // Load actuals from Firestore job document field
-  conDb.collection('jobs').doc(jobId).get().then(doc => {
+  coll('jobs').doc(jobId).get().then(doc => {
     if (doc.exists) {
       const data = doc.data();
       if (data.costActuals) _jcdActualsCache[jobId] = data.costActuals;
       else _jcdActualsCache[jobId] = {};
     }
     // Also load estimate sub-collection to build estByCat
-    return conDb.collection('jobs').doc(jobId).collection('estimate').get();
+    return coll('jobs').doc(jobId).collection('estimate').get();
   }).then(snap => {
     const byCat = {};
     snap.forEach(doc => {
@@ -1235,7 +1248,7 @@ function saveJobCostActuals() {
   if (!jobId || !conDb) return;
   const actuals = _jcdActualsCache[jobId] || {};
   const totalActual = Object.values(actuals).reduce((s,v)=>s+v,0);
-  conDb.collection('jobs').doc(jobId).update({
+  coll('jobs').doc(jobId).update({
     costActuals: actuals,
     actualCost: totalActual,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -1263,7 +1276,7 @@ function getJobTotalActual(jobId) {
 function loadAllCOTotals() {
   if (!conDb || !conJobs.length) return;
   conJobs.forEach(job => {
-    conDb.collection('jobs').doc(job.id).collection('changeorders')
+    coll('jobs').doc(job.id).collection('changeorders')
       .where('status','==','Approved').get()
       .then(snap => {
         let total = 0;
@@ -1338,7 +1351,7 @@ window.switchDetailTab = switchDetailTab;
 
 function conLoadEstimate(jobId) {
   if (!conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('estimate')
+  coll('jobs').doc(jobId).collection('estimate')
     .orderBy('category').onSnapshot(snap => {
       conEstItems = [];
       snap.forEach(doc => conEstItems.push({ id: doc.id, ...doc.data() }));
@@ -1449,7 +1462,7 @@ let conEditingCOId = null;
 
 function conLoadCOs(jobId) {
   if (!conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('changeorders')
+  coll('jobs').doc(jobId).collection('changeorders')
     .orderBy('date', 'desc').onSnapshot(snap => {
       conCOs = [];
       snap.forEach(doc => conCOs.push({ id: doc.id, ...doc.data() }));
@@ -1541,7 +1554,7 @@ function saveCO() {
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: conCurrentUser ? conCurrentUser.email : 'unknown'
   };
-  const col = conDb.collection('jobs').doc(conCurrentJobId).collection('changeorders');
+  const col = coll('jobs').doc(conCurrentJobId).collection('changeorders');
   if (conEditingCOId) {
     col.doc(conEditingCOId).update(data)
       .then(() => { kClose('addCOModal'); switchDetailTab('changeorders', null); })
@@ -1550,7 +1563,7 @@ function saveCO() {
     data.coNumber = 'CO-' + String(conCOs.length + 1).padStart(3, '0');
     data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
     data.createdBy = conCurrentUser ? conCurrentUser.email : 'unknown';
-    col.add(data)
+    col.add({...data, companyId: currentCompanyId})
       .then(() => { kClose('addCOModal'); switchDetailTab('changeorders', null); })
       .catch(e => alert('Error: ' + e.message));
   }
@@ -1558,13 +1571,13 @@ function saveCO() {
 
 function deleteCO() {
   if (!conEditingCOId || !confirm('Delete this change order?')) return;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('changeorders').doc(conEditingCOId).delete()
+  coll('jobs').doc(conCurrentJobId).collection('changeorders').doc(conEditingCOId).delete()
     .then(() => kClose('addCOModal'))
     .catch(e => alert('Error: ' + e.message));
 }
 
 function quickApproveCO(id) {
-  conDb.collection('jobs').doc(conCurrentJobId).collection('changeorders').doc(id).update({
+  coll('jobs').doc(conCurrentJobId).collection('changeorders').doc(id).update({
     status: 'Approved',
     approvedBy: conCurrentUser ? conCurrentUser.displayName || conCurrentUser.email : 'Unknown',
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -1579,7 +1592,7 @@ let conEditingSubId = null;
 
 function conLoadSubs(jobId) {
   if (!conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('subs')
+  coll('jobs').doc(jobId).collection('subs')
     .orderBy('trade').onSnapshot(snap => {
       conSubs = [];
       snap.forEach(doc => conSubs.push({ id: doc.id, ...doc.data() }));
@@ -1667,14 +1680,14 @@ function saveSub() {
     notes: document.getElementById('subNotes').value.trim(),
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  const col = conDb.collection('jobs').doc(conCurrentJobId).collection('subs');
+  const col = coll('jobs').doc(conCurrentJobId).collection('subs');
   if (conEditingSubId) {
     col.doc(conEditingSubId).update(data)
       .then(() => { kClose('addSubModal'); switchDetailTab('subs', null); })
       .catch(e => alert('Error: ' + e.message));
   } else {
     data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-    col.add(data)
+    col.add({...data, companyId: currentCompanyId})
       .then(() => { kClose('addSubModal'); switchDetailTab('subs', null); })
       .catch(e => alert('Error: ' + e.message));
   }
@@ -1682,7 +1695,7 @@ function saveSub() {
 
 function deleteSub() {
   if (!conEditingSubId || !confirm('Delete this sub/vendor?')) return;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('subs').doc(conEditingSubId).delete()
+  coll('jobs').doc(conCurrentJobId).collection('subs').doc(conEditingSubId).delete()
     .then(() => kClose('addSubModal'))
     .catch(e => alert('Error: ' + e.message));
 }
@@ -1804,7 +1817,7 @@ window.saveLog = async function() {
     createdBy: conCurrentUser ? conCurrentUser.email : 'unknown',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  conDb.collection('jobs').doc(conCurrentJobId).collection('logs').add(data)
+  coll('jobs').doc(conCurrentJobId).collection('logs').add(subDoc(data))
     .then(() => {
       _logPhotoPending = [];
       kClose('addLogModal');
@@ -1904,14 +1917,13 @@ function conInitFirebase() {
     ktRevealSignIn();
     conAuth.onAuthStateChanged(user => {
       if (user) {
-        const email = user.email || '';
-        // Role check happens in loadUserRole
         conCurrentUser = user;
-        // Load user role from Firestore before showing app
-        loadUserRole(user, () => {
-          conShowMain(user);
-          conLoadJobs();
-          setTimeout(() => loadCompanyProfile(), 800);
+        resolveCompany(user, () => {
+          loadUserRole(user, () => {
+            conShowMain(user);
+            conLoadJobs();
+            setTimeout(() => loadCompanyProfile(), 800);
+          });
         });
       } else {
         conCurrentUser = null;
@@ -1931,7 +1943,7 @@ function conInitFirebase() {
 function deleteCurrentJob() {
   if (!conCurrentJobId || !conDb) return;
   if (!confirm('Delete this job? This cannot be undone.')) return;
-  conDb.collection('jobs').doc(conCurrentJobId).delete()
+  coll('jobs').doc(conCurrentJobId).delete()
     .then(() => {
       kClose('jobDetailModal');
       conCurrentJobId = null;
@@ -2051,7 +2063,7 @@ function renderRecentLogs() {
   if (!el || !conDb) return;
   
   // Try collectionGroup first (requires index), fall back to per-job fetch
-  conDb.collectionGroup('logs')
+  conDb.collectionGroup('logs').where('companyId','==',currentCompanyId)
     .orderBy('date', 'desc')
     .limit(8)
     .get()
@@ -2085,7 +2097,7 @@ function renderRecentLogs() {
       const allLogs = [];
       let pending = conJobs.length;
       conJobs.forEach(job => {
-        conDb.collection('jobs').doc(job.id).collection('logs')
+        coll('jobs').doc(job.id).collection('logs')
           .orderBy('date','desc').limit(3).get()
           .then(snap => {
             snap.forEach(doc => allLogs.push({ ...doc.data(), jobId: job.id, jobName: job.name }));
@@ -2123,7 +2135,7 @@ function renderUpcomingPhases() {
   const in7 = new Date(Date.now() + 7*86400000).toISOString().split('T')[0];
 
   // Query phases across all jobs starting in next 7 days
-  conDb.collectionGroup('phases')
+  conDb.collectionGroup('phases').where('companyId','==',currentCompanyId)
     .orderBy('startDate')
     .startAt(today)
     .endAt(in7)
@@ -2161,7 +2173,7 @@ function renderUpcomingPhases() {
       const allPhases = [];
       let pending = conJobs.length;
       conJobs.forEach(job => {
-        conDb.collection('jobs').doc(job.id).collection('phases')
+        coll('jobs').doc(job.id).collection('phases')
           .where('startDate','>=',today).where('startDate','<=',in7).get()
           .then(snap => { snap.forEach(doc => allPhases.push({ ...doc.data(), jobId: job.id, jobName: job.name })); })
           .catch(() => {})
@@ -2223,7 +2235,7 @@ function catColor(cat) { return CAT_COLORS[cat] || 'var(--amber)'; }
 function loadCatalog() {
   if (!conDb) return;
   if (catalogListener) catalogListener(); // unsubscribe previous
-  catalogListener = conDb.collection('catalog')
+  catalogListener = coll('catalog')
     .orderBy('category')
     .onSnapshot(snap => {
       catalogItems = [];
@@ -2352,7 +2364,7 @@ function saveCatalogItem() {
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: conCurrentUser ? conCurrentUser.email : 'unknown'
   };
-  const col = conDb.collection('catalog');
+  const col = coll('catalog');
   if (id) {
     col.doc(id).update(data)
       .then(() => kClose('catalogItemModal'))
@@ -2360,7 +2372,7 @@ function saveCatalogItem() {
   } else {
     data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
     data.createdBy = conCurrentUser ? conCurrentUser.email : 'unknown';
-    col.add(data)
+    col.add({...data, companyId: currentCompanyId})
       .then(() => kClose('catalogItemModal'))
       .catch(e => alert('Error: ' + e.message));
   }
@@ -2369,7 +2381,7 @@ function saveCatalogItem() {
 function deleteCatalogItem() {
   const id = document.getElementById('catItemId').value;
   if (!id || !confirm('Delete this catalog item?')) return;
-  conDb.collection('catalog').doc(id).delete()
+  coll('catalog').doc(id).delete()
     .then(() => kClose('catalogItemModal'))
     .catch(e => alert('Error: ' + e.message));
 }
@@ -2390,7 +2402,7 @@ function addCatalogItemToEstimate(catItem) {
     notes: catItem.notes || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  conDb.collection('jobs').doc(conCurrentJobId).collection('estimate').add(data)
+  coll('jobs').doc(conCurrentJobId).collection('estimate').add(subDoc(data))
     .then(() => {
       // Brief confirmation
       const btn = event.target;
@@ -2427,7 +2439,7 @@ function loadAllInvoices() {
   }
 
   conJobs.forEach(job => {
-    const unsub = conDb.collection('jobs').doc(job.id).collection('invoices')
+    const unsub = coll('jobs').doc(job.id).collection('invoices')
       .orderBy('date', 'desc')
       .onSnapshot(snap => {
         // Remove old invoices for this job
@@ -2520,7 +2532,7 @@ function renderInvoicingPage() {
 // ── Per-job invoice list (in job detail modal) ──
 function loadJobInvoices(jobId) {
   if (!conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('invoices')
+  coll('jobs').doc(jobId).collection('invoices')
     .orderBy('date','desc')
     .onSnapshot(snap => {
       const invs = [];
@@ -2609,7 +2621,7 @@ function openAddInvoiceModal(jobId) {
 
 function openEditInvoice(jobId, invId) {
   if (!conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('invoices').doc(invId).get()
+  coll('jobs').doc(jobId).collection('invoices').doc(invId).get()
     .then(doc => {
       if (!doc.exists) return;
       const inv = doc.data();
@@ -2687,7 +2699,7 @@ function calcInvBalance() {
 function importEstimateToInvoice() {
   const jobId = document.getElementById('invJobId')?.value;
   if (!jobId || !conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('estimate').get()
+  coll('jobs').doc(jobId).collection('estimate').get()
     .then(snap => {
       snap.forEach(doc => {
         const item = doc.data();
@@ -2737,8 +2749,8 @@ function saveInvoice() {
   // Auto-set paid if full amount received
   if (data.amtPaid >= data.total && data.total > 0) data.status = 'Paid';
 
-  const col = conDb.collection('jobs').doc(jobId).collection('invoices');
-  const promise = invId ? col.doc(invId).update(data) : col.add({ ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: conCurrentUser?.email || 'unknown' });
+  const col = coll('jobs').doc(jobId).collection('invoices');
+  const promise = invId ? col.doc(invId).update(data) : col.add({ ...data, companyId: currentCompanyId, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: conCurrentUser?.email || 'unknown' });
 
   promise.then(() => {
     kClose('addInvoiceModal');
@@ -2751,13 +2763,13 @@ function deleteInvoice() {
   const jobId = document.getElementById('invJobId')?.value;
   const invId = document.getElementById('invId')?.value;
   if (!jobId || !invId || !confirm('Delete this invoice?')) return;
-  conDb.collection('jobs').doc(jobId).collection('invoices').doc(invId).delete()
+  coll('jobs').doc(jobId).collection('invoices').doc(invId).delete()
     .then(() => { kClose('addInvoiceModal'); loadAllInvoices(); });
 }
 
 function quickMarkPaid(jobId, invId, total) {
   if (!confirm('Mark this invoice as Paid in Full?')) return;
-  conDb.collection('jobs').doc(jobId).collection('invoices').doc(invId).update({
+  coll('jobs').doc(jobId).collection('invoices').doc(invId).update({
     status: 'Paid',
     amtPaid: total,
     paidDate: new Date().toISOString().split('T')[0],
@@ -2768,7 +2780,7 @@ function quickMarkPaid(jobId, invId, total) {
 // ── Print Invoice ──
 function printInvoiceById(jobId, invId) {
   if (!conDb) return;
-  conDb.collection('jobs').doc(jobId).collection('invoices').doc(invId).get()
+  coll('jobs').doc(jobId).collection('invoices').doc(invId).get()
     .then(doc => {
       if (!doc.exists) return;
       const inv = doc.data();
@@ -2816,7 +2828,7 @@ window.openJobDetail = function(jobId) {
 const _origConLoadJobsInv = conLoadJobs;
 function conLoadJobs() {
   if (!conDb) return;
-  conDb.collection('jobs').orderBy('createdAt','desc').onSnapshot(snap => {
+  coll('jobs').orderBy('createdAt','desc').onSnapshot(snap => {
     conJobs = [];
     snap.forEach(doc => conJobs.push({ id: doc.id, ...doc.data() }));
     conRenderBoard();
@@ -2882,14 +2894,14 @@ function loadCompanyProfile() {
     roleEl.textContent = currentUserRole;
     roleEl.style.color = roleData.color || 'var(--muted)';
   }
-  conDb.collection('settings').doc('company').get()
+  coll('settings').doc('company').get()
     .then(doc => {
       if (doc.exists) {
         companyProfile = { ...DEFAULT_COMPANY_PROFILE, ...doc.data() };
       } else {
         // First time — save the default profile
         companyProfile = { ...DEFAULT_COMPANY_PROFILE };
-        conDb.collection('settings').doc('company').set(companyProfile).catch(() => {});
+        coll('settings').doc('company').set(companyProfile).catch(() => {});
       }
       populateSettingsForm();
       updateSidebarUserInfo();
@@ -2958,7 +2970,7 @@ function saveCompanyProfile() {
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
 
-  conDb.collection('settings').doc('company').set(profile)
+  coll('settings').doc('company').set(profile)
     .then(() => {
       companyProfile = profile;
       // Show saved confirmation
@@ -3105,12 +3117,136 @@ window.clearLogo = clearLogo;
 // ── ROLE & TEAM MANAGEMENT ──
 // ════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════
+// ── MULTI-TENANCY: Company Resolution ──
+// ════════════════════════════════════════════════════
+
+function resolveCompany(user, callback) {
+  const email = (user.email || '').toLowerCase();
+
+  // 1. Check if this user owns a company
+  conDb.collection('companies').where('ownerEmail', '==', email).limit(1).get()
+    .then(snap => {
+      if (!snap.empty) {
+        // Found their company
+        currentCompanyId = snap.docs[0].id;
+        console.log('KYTRAC: Loaded company', currentCompanyId);
+        if (callback) callback();
+        return;
+      }
+
+      // 2. Check if they're a member of a company (invited user)
+      conDb.collection('companies').where('memberEmails', 'array-contains', email).limit(1).get()
+        .then(snap2 => {
+          if (!snap2.empty) {
+            currentCompanyId = snap2.docs[0].id;
+            console.log('KYTRAC: Joined company as member', currentCompanyId);
+            if (callback) callback();
+            return;
+          }
+
+          // 3. No company found — show onboarding to create one
+          showCompanyOnboarding(user, callback);
+        });
+    })
+    .catch(e => {
+      console.error('resolveCompany error:', e);
+      // Fallback for first-ever user — create company immediately
+      showCompanyOnboarding(user, callback);
+    });
+}
+
+function showCompanyOnboarding(user, callback) {
+  // Hide auth wall, show onboarding overlay
+  document.getElementById('ktAuthWall').style.display = 'none';
+  document.getElementById('ktApp').style.display = 'none';
+
+  let onboarding = document.getElementById('ktOnboarding');
+  if (!onboarding) {
+    onboarding = document.createElement('div');
+    onboarding.id = 'ktOnboarding';
+    onboarding.style.cssText = 'position:fixed;inset:0;background:#060e1e;display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px';
+    onboarding.innerHTML = `
+      <div style="background:rgba(8,18,36,.95);border:1px solid rgba(217,119,6,.4);border-radius:20px;padding:36px;max-width:480px;width:100%">
+        <div style="font-size:1.8rem;font-weight:900;color:#f59e0b;margin-bottom:6px">Welcome to KYTRAC</div>
+        <div style="color:#94a3b8;font-size:.88rem;margin-bottom:28px">Let's set up your company to get started.</div>
+        <label style="display:block;font-size:.78rem;color:#94a3b8;margin-bottom:5px">Company Name *</label>
+        <input id="onboardCompanyName" placeholder="Jason Hudson Construction" style="width:100%;padding:12px 14px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:10px;color:#eaf0fb;font-size:.95rem;margin-bottom:16px;box-sizing:border-box" />
+        <label style="display:block;font-size:.78rem;color:#94a3b8;margin-bottom:5px">Your Name *</label>
+        <input id="onboardOwnerName" placeholder="${user.displayName || ''}" value="${user.displayName || ''}" style="width:100%;padding:12px 14px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:10px;color:#eaf0fb;font-size:.95rem;margin-bottom:16px;box-sizing:border-box" />
+        <label style="display:block;font-size:.78rem;color:#94a3b8;margin-bottom:5px">Phone</label>
+        <input id="onboardPhone" placeholder="(314) 555-0100" style="width:100%;padding:12px 14px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:10px;color:#eaf0fb;font-size:.95rem;margin-bottom:24px;box-sizing:border-box" />
+        <button onclick="createCompany('${user.email}')" style="width:100%;padding:14px;background:#d97706;border:none;border-radius:10px;color:#fff;font-size:1rem;font-weight:700;cursor:pointer">
+          Create My Company →
+        </button>
+        <div id="onboardError" style="color:#f87171;font-size:.82rem;margin-top:10px;display:none"></div>
+      </div>
+    `;
+    document.body.appendChild(onboarding);
+  }
+  onboarding.style.display = 'flex';
+  window._onboardCallback = callback;
+}
+
+function createCompany(ownerEmail) {
+  const name = document.getElementById('onboardCompanyName')?.value.trim();
+  const ownerName = document.getElementById('onboardOwnerName')?.value.trim();
+  const phone = document.getElementById('onboardPhone')?.value.trim();
+  const errEl = document.getElementById('onboardError');
+
+  if (!name) {
+    if (errEl) { errEl.textContent = 'Company name is required.'; errEl.style.display = 'block'; }
+    return;
+  }
+
+  const btn = document.querySelector('#ktOnboarding button');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
+
+  const companyData = {
+    name,
+    ownerEmail: ownerEmail.toLowerCase(),
+    ownerName: ownerName || ownerEmail,
+    phone: phone || '',
+    memberEmails: [ownerEmail.toLowerCase()],
+    plan: 'trial',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  };
+
+  conDb.collection('companies').add(companyData)
+    .then(ref => {
+      currentCompanyId = ref.id;
+      console.log('KYTRAC: Created company', currentCompanyId);
+
+      // Also set up the settings/company doc with company profile
+      return coll('settings').doc('company').set({
+        companyName: name,
+        phone: phone || '',
+        email: ownerEmail,
+        address: '',
+        license: '',
+        insurance: '',
+        logo: '',
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+    })
+    .then(() => {
+      const onboarding = document.getElementById('ktOnboarding');
+      if (onboarding) onboarding.style.display = 'none';
+      if (window._onboardCallback) window._onboardCallback();
+    })
+    .catch(e => {
+      if (errEl) { errEl.textContent = 'Error: ' + e.message; errEl.style.display = 'block'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Create My Company →'; }
+    });
+}
+window.createCompany = createCompany;
+
 function loadUserRole(user, callback) {
   if (!conDb) { currentUserRole = 'Owner'; if(callback) callback(); return; }
 
   const email = (user.email || '').toLowerCase();
 
-  conDb.collection('settings').doc('team').get()
+  coll('settings').doc('team').get()
     .then(doc => {
       if (!doc.exists) {
         // First user ever — make them Owner and create team doc
@@ -3118,7 +3254,7 @@ function loadUserRole(user, callback) {
         currentUserTeamData = { email, name: user.displayName || email, role: 'Owner', addedAt: new Date().toISOString() };
         const teamData = {};
         teamData[email.replace(/\./g,'_')] = currentUserTeamData;
-        conDb.collection('settings').doc('team').set({ members: teamData })
+        coll('settings').doc('team').set({ members: teamData })
           .catch(() => {});
         // Immediately update role display
         const roleElFirst = document.getElementById('ktUserRole');
@@ -3169,7 +3305,7 @@ function loadTeamMembers() {
     return;
   }
 
-  conDb.collection('settings').doc('team').get()
+  coll('settings').doc('team').get()
     .then(doc => {
       const members = doc.exists ? (doc.data().members || {}) : {};
       const memberList = Object.values(members).sort((a,b) => {
@@ -3222,7 +3358,7 @@ function addTeamMember() {
   const key = email.replace(/\./g,'_');
   const memberData = { email, name, role, addedAt: new Date().toISOString(), addedBy: conCurrentUser?.email || '' };
 
-  conDb.collection('settings').doc('team').set(
+  coll('settings').doc('team').set(
     { members: { [key]: memberData } },
     { merge: true }
   ).then(() => {
@@ -3235,7 +3371,7 @@ function addTeamMember() {
 
 function updateMemberRole(key, newRole) {
   if (currentUserRole !== 'Owner') return;
-  conDb.collection('settings').doc('team').set(
+  coll('settings').doc('team').set(
     { members: { [key]: { role: newRole, updatedAt: new Date().toISOString() } } },
     { merge: true }
   ).then(() => loadTeamMembers())
@@ -3245,12 +3381,12 @@ function updateMemberRole(key, newRole) {
 function removeMember(key) {
   if (currentUserRole !== 'Owner') return;
   if (!confirm('Remove this team member? They will lose access immediately.')) return;
-  conDb.collection('settings').doc('team').get()
+  coll('settings').doc('team').get()
     .then(doc => {
       if (!doc.exists) return;
       const members = doc.data().members || {};
       delete members[key];
-      return conDb.collection('settings').doc('team').update({ members });
+      return coll('settings').doc('team').update({ members });
     })
     .then(() => loadTeamMembers())
     .catch(e => alert('Error: ' + e.message));
@@ -3309,7 +3445,7 @@ let _todoFilter = 'all';
 
 function loadTodos() {
   if (!conDb) return;
-  conDb.collection('todos')
+  coll('todos')
     .orderBy('createdAt', 'desc')
     .onSnapshot(snap => {
       allTodos = [];
@@ -3341,7 +3477,7 @@ function populateTodoJobFilter() {
 function populateTodoAssigneeFilter() {
   // Load team members for assignee dropdown
   if (!conDb) return;
-  conDb.collection('settings').doc('team').get().then(doc => {
+  coll('settings').doc('team').get().then(doc => {
     if (!doc.exists) return;
     const members = doc.data().members || {};
     const sel = document.getElementById('newTodoAssignee');
@@ -3454,7 +3590,7 @@ function addTodo() {
     createdByName: conCurrentUser?.displayName || conCurrentUser?.email || ''
   };
 
-  conDb.collection('todos').add(data)
+  coll('todos').add(data)
     .then(() => {
       if (input) input.value = '';
     })
@@ -3463,7 +3599,7 @@ function addTodo() {
 
 function toggleTodo(id, done) {
   if (!conDb) return;
-  conDb.collection('todos').doc(id).update({
+  coll('todos').doc(id).update({
     done,
     completedAt: done ? firebase.firestore.FieldValue.serverTimestamp() : null,
     completedBy: done ? (conCurrentUser?.email || '') : ''
@@ -3472,7 +3608,7 @@ function toggleTodo(id, done) {
 
 function deleteTodo(id) {
   if (!confirm('Delete this to-do?')) return;
-  conDb.collection('todos').doc(id).delete().catch(e => alert('Error: ' + e.message));
+  coll('todos').doc(id).delete().catch(e => alert('Error: ' + e.message));
 }
 
 function openEditTodo(id) {
@@ -3482,7 +3618,7 @@ function openEditTodo(id) {
   if (newText === null) return;
   const trimmed = newText.trim();
   if (!trimmed) return;
-  conDb.collection('todos').doc(id).update({ text: trimmed })
+  coll('todos').doc(id).update({ text: trimmed })
     .catch(e => alert('Error: ' + e.message));
 }
 
@@ -3494,7 +3630,7 @@ let _editingCustomerId = null;
 
 function loadCustomers() {
   if (!conDb) return;
-  conDb.collection('customers')
+  coll('customers')
     .orderBy('name')
     .onSnapshot(snap => {
       allCustomers = [];
@@ -3593,10 +3729,10 @@ function saveCustomer() {
     updatedBy: conCurrentUser?.email || ''
   };
 
-  const col = conDb.collection('customers');
+  const col = coll('customers');
   const promise = id
     ? col.doc(id).update(data)
-    : col.add({ ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: conCurrentUser?.email || '' });
+    : col.add({ ...data, companyId: currentCompanyId, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: conCurrentUser?.email || '' });
 
   promise.then(() => kClose('customerModal'))
     .catch(e => alert('Error: ' + e.message));
@@ -3605,7 +3741,7 @@ function saveCustomer() {
 function deleteCustomer() {
   const id = document.getElementById('customerId')?.value;
   if (!id || !confirm('Delete this customer?')) return;
-  conDb.collection('customers').doc(id).delete()
+  coll('customers').doc(id).delete()
     .then(() => kClose('customerModal'))
     .catch(e => alert('Error: ' + e.message));
 }
@@ -3632,7 +3768,7 @@ let _clockStart = null;
 function loadTimeEntries() {
   if (!conDb) return;
   const today = new Date().toISOString().split('T')[0];
-  conDb.collection('timeentries')
+  coll('timeentries')
     .orderBy('clockIn', 'desc')
     .limit(200)
     .onSnapshot(snap => {
@@ -3688,7 +3824,7 @@ function clockIn() {
     hours: null
   };
 
-  conDb.collection('timeentries').add(entry)
+  coll('timeentries').add(entry)
     .then(ref => {
       _clockStart = now;
       startClockTicker();
@@ -3702,7 +3838,7 @@ function clockOut() {
   const clockInTime = _clockedInEntry.clockInISO ? new Date(_clockedInEntry.clockInISO) : new Date(now - 3600000);
   const hours = Math.round((now - clockInTime) / 3600000 * 100) / 100;
 
-  conDb.collection('timeentries').doc(_clockedInEntry.id).update({
+  coll('timeentries').doc(_clockedInEntry.id).update({
     clockOut: firebase.firestore.FieldValue.serverTimestamp(),
     clockOutISO: now.toISOString(),
     hours,
@@ -3876,7 +4012,7 @@ function forceClockOut(entryId) {
   const now = new Date();
   const clockInTime = entry.clockInISO ? new Date(entry.clockInISO) : new Date(now - 3600000);
   const hours = Math.round((now - clockInTime) / 3600000 * 100) / 100;
-  conDb.collection('timeentries').doc(entryId).update({
+  coll('timeentries').doc(entryId).update({
     clockOut: firebase.firestore.FieldValue.serverTimestamp(),
     clockOutISO: now.toISOString(),
     hours
@@ -3885,7 +4021,7 @@ function forceClockOut(entryId) {
 
 function deleteTimeEntry(id) {
   if (!confirm('Delete this time entry?')) return;
-  conDb.collection('timeentries').doc(id).delete().catch(e => alert('Error: ' + e.message));
+  coll('timeentries').doc(id).delete().catch(e => alert('Error: ' + e.message));
 }
 
 // ════════════════════════════════════════════════════
@@ -4081,7 +4217,7 @@ let _vendorBills = []; // bills for current vendor detail view
 
 function loadVendors() {
   if (!conDb) return;
-  conDb.collection('vendors').orderBy('name').onSnapshot(snap => {
+  coll('vendors').orderBy('name').onSnapshot(snap => {
     allVendors = [];
     snap.forEach(doc => allVendors.push({ id: doc.id, ...doc.data() }));
     renderVendors();
@@ -4281,16 +4417,16 @@ function saveVendor() {
     notes: document.getElementById('vendorNotes')?.value.trim() || '',
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  const col = conDb.collection('vendors');
+  const col = coll('vendors');
   const promise = id ? col.doc(id).update(data)
-    : col.add({ ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: conCurrentUser?.email||'' });
+    : col.add({ ...data, companyId: currentCompanyId, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: conCurrentUser?.email||'' });
   promise.then(() => kClose('vendorModal')).catch(e => alert('Error: ' + e.message));
 }
 
 function deleteVendor() {
   const id = document.getElementById('vendorId')?.value;
   if (!id || !confirm('Delete this vendor?')) return;
-  conDb.collection('vendors').doc(id).delete()
+  coll('vendors').doc(id).delete()
     .then(() => { kClose('vendorModal'); kClose('vendorDetailModal'); })
     .catch(e => alert('Error: ' + e.message));
 }
@@ -4298,7 +4434,7 @@ function deleteVendor() {
 // ── Bills / AP ──
 function loadVendorBills(vendorId) {
   if (!conDb) return;
-  conDb.collection('vendors').doc(vendorId).collection('bills')
+  coll('vendors').doc(vendorId).collection('bills')
     .orderBy('billDate', 'desc').get()
     .then(snap => {
       _vendorBills = [];
@@ -4384,9 +4520,9 @@ function saveBill() {
     notes: document.getElementById('billNotes')?.value.trim() || '',
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  const col = conDb.collection('vendors').doc(vendorId).collection('bills');
+  const col = coll('vendors').doc(vendorId).collection('bills');
   const promise = billId ? col.doc(billId).update(data)
-    : col.add({ ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    : col.add({ ...data, companyId: currentCompanyId, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
   promise.then(() => { kClose('addBillModal'); loadVendorBills(vendorId); })
     .catch(e => alert('Error: ' + e.message));
 }
@@ -4395,7 +4531,7 @@ function deleteBill() {
   const vendorId = document.getElementById('billVendorId')?.value;
   const billId = document.getElementById('billId')?.value;
   if (!vendorId || !billId || !confirm('Delete this bill?')) return;
-  conDb.collection('vendors').doc(vendorId).collection('bills').doc(billId).delete()
+  coll('vendors').doc(vendorId).collection('bills').doc(billId).delete()
     .then(() => { kClose('addBillModal'); loadVendorBills(vendorId); })
     .catch(e => alert('Error: ' + e.message));
 }
@@ -4456,7 +4592,7 @@ function formatFileSize(bytes) {
 
 function loadDocuments() {
   if (!conDb) return;
-  conDb.collection('documents')
+  coll('documents')
     .orderBy('uploadedAt', 'desc')
     .onSnapshot(snap => {
       allDocuments = [];
@@ -4575,7 +4711,7 @@ function loadJobDocs(jobId) {
   renderJobDocList(cached);
   // Then refresh from Firestore if available
   if (!conDb) return;
-  conDb.collection('documents')
+  coll('documents')
     .where('jobId','==',jobId)
     .orderBy('uploadedAt','desc')
     .get()
@@ -4586,7 +4722,7 @@ function loadJobDocs(jobId) {
     })
     .catch(() => {
       // orderBy may need index - fall back to unordered
-      conDb.collection('documents').where('jobId','==',jobId).get()
+      coll('documents').where('jobId','==',jobId).get()
         .then(snap => {
           const docs = [];
           snap.forEach(doc => docs.push({ id: doc.id, ...doc.data() }));
@@ -4648,7 +4784,7 @@ async function handleDocUpload(input, context) {
         uploadedByName: conCurrentUser?.displayName || conCurrentUser?.email || '',
       };
 
-      await conDb.collection('documents').add(docData);
+      await coll('documents').add(docData);
     } catch(e) {
       alert(`Error uploading ${file.name}: ${e.message}`);
     }
@@ -4710,7 +4846,7 @@ function downloadDoc(id) {
 
 function deleteDoc(id) {
   if (!confirm('Delete this document? This cannot be undone.')) return;
-  conDb.collection('documents').doc(id).delete()
+  coll('documents').doc(id).delete()
     .then(() => {
       allDocuments = allDocuments.filter(d => d.id !== id);
       renderDocuments();
@@ -4735,7 +4871,7 @@ let globalLogs = []; // [{...logData, jobId, jobName}]
 function loadGlobalLogs() {
   if (!conDb) return;
   // Load logs across all jobs using collectionGroup
-  conDb.collectionGroup('logs')
+  conDb.collectionGroup('logs').where('companyId','==',currentCompanyId)
     .orderBy('date', 'desc')
     .limit(150)
     .onSnapshot(snap => {
@@ -4766,7 +4902,7 @@ function loadGlobalLogsFallback() {
   globalLogs = [];
   let pending = conJobs.length;
   conJobs.forEach(job => {
-    conDb.collection('jobs').doc(job.id).collection('logs')
+    coll('jobs').doc(job.id).collection('logs')
       .orderBy('date', 'desc').limit(20).get()
       .then(snap => {
         snap.forEach(doc => {
@@ -5004,7 +5140,7 @@ function getSelectedCrew() {
 function populateCrewCheckboxes(selectedCrew) {
   const container = document.getElementById('crewCheckboxes');
   if (!container || !conDb) return;
-  conDb.collection('settings').doc('team').get().then(doc => {
+  coll('settings').doc('team').get().then(doc => {
     if (!doc.exists) {
       container.innerHTML = '<div class="small muted" style="font-style:italic;grid-column:1/-1">No team members added yet. Add team members in Company Settings.</div>';
       return;
@@ -5074,7 +5210,7 @@ let globalPhases = []; // [{...phaseData, jobId, jobName}]
 function loadGlobalPhases() {
   if (!conDb) return;
   // Try collectionGroup first
-  conDb.collectionGroup('phases')
+  conDb.collectionGroup('phases').where('companyId','==',currentCompanyId)
     .orderBy('startDate')
     .onSnapshot(snap => {
       globalPhases = [];
@@ -5102,7 +5238,7 @@ function loadGlobalPhasesFallback() {
   globalPhases = [];
   let pending = conJobs.length;
   conJobs.forEach(job => {
-    conDb.collection('jobs').doc(job.id).collection('phases')
+    coll('jobs').doc(job.id).collection('phases')
       .orderBy('startDate').get()
       .then(snap => {
         snap.forEach(doc => {
@@ -5560,7 +5696,7 @@ window.checkPortalMode = checkPortalMode;
 
 function loadCalendarEvents() {
   if (!conDb) return;
-  conDb.collection('calendarEvents')
+  coll('calendarEvents')
     .orderBy('date')
     .onSnapshot(snap => {
       calendarEvents = [];
@@ -5575,7 +5711,7 @@ function loadCalendarEvents() {
 
 function buildTeamColors() {
   if (!conDb) return;
-  conDb.collection('settings').doc('team').get().then(doc => {
+  coll('settings').doc('team').get().then(doc => {
     if (!doc.exists) return;
     const members = Object.values(doc.data().members || {});
     _teamColors = {};
@@ -5683,7 +5819,7 @@ function openCalEventModal(id, prefilledDate) {
   // Populate assignee dropdown from team
   const assignSel = document.getElementById('calEventAssignee');
   if (assignSel && conDb) {
-    conDb.collection('settings').doc('team').get().then(doc => {
+    coll('settings').doc('team').get().then(doc => {
       const members = doc.exists ? Object.values(doc.data().members || {}) : [];
       assignSel.innerHTML = '<option value="">Everyone (All Team)</option>' +
         members.map(m => {
@@ -5728,9 +5864,9 @@ function saveCalEvent() {
     createdBy: conCurrentUser?.email || ''
   };
 
-  const col = conDb.collection('calendarEvents');
+  const col = coll('calendarEvents');
   const promise = id ? col.doc(id).update(data)
-    : col.add({ ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    : col.add({ ...data, companyId: currentCompanyId, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
 
   promise.then(() => kClose('calEventModal'))
     .catch(e => alert('Error: ' + e.message));
@@ -5739,7 +5875,7 @@ function saveCalEvent() {
 function deleteCalEvent() {
   const id = document.getElementById('calEventId')?.value;
   if (!id || !confirm('Delete this event?')) return;
-  conDb.collection('calendarEvents').doc(id).delete()
+  coll('calendarEvents').doc(id).delete()
     .then(() => kClose('calEventModal'))
     .catch(e => alert('Error: ' + e.message));
 }
@@ -6052,7 +6188,7 @@ function renderInvoicesReport(el, f) {
     return;
   }
   conJobs.forEach(job => {
-    conDb.collection('jobs').doc(job.id).collection('invoices').get()
+    coll('jobs').doc(job.id).collection('invoices').get()
       .then(snap => {
         snap.forEach(d => allInvs.push({ ...d.data(), jobName: job.name, jobId: job.id }));
       }).catch(() => {})
@@ -6148,7 +6284,7 @@ function renderVendorsReport(el) {
   const today = new Date().toISOString().split('T')[0];
 
   allVendors.forEach(v => {
-    conDb.collection('vendors').doc(v.id).collection('bills').get()
+    coll('vendors').doc(v.id).collection('bills').get()
       .then(snap => {
         let total = 0, paid = 0;
         snap.forEach(d => { const b = d.data(); total += b.amount||0; paid += b.amtPaid||0; });
@@ -6229,7 +6365,7 @@ let _poLineItems = [];
 
 function loadPOs() {
   if (!conDb) return;
-  conDb.collection('purchaseOrders')
+  coll('purchaseOrders')
     .orderBy('createdAt', 'desc')
     .onSnapshot(snap => {
       allPOs = [];
@@ -6434,9 +6570,9 @@ function savePO(status) {
     updatedBy: conCurrentUser?.email || ''
   };
 
-  const col = conDb.collection('purchaseOrders');
+  const col = coll('purchaseOrders');
   const promise = id ? col.doc(id).update(data)
-    : col.add({ ...data, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: conCurrentUser?.email||'' });
+    : col.add({ ...data, companyId: currentCompanyId, createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: conCurrentUser?.email||'' });
 
   promise.then(() => {
     kClose('poModal');
@@ -6452,7 +6588,7 @@ function savePO(status) {
 function deletePO() {
   const id = document.getElementById('poId')?.value;
   if (!id || !confirm('Delete this purchase order?')) return;
-  conDb.collection('purchaseOrders').doc(id).delete()
+  coll('purchaseOrders').doc(id).delete()
     .then(() => kClose('poModal'))
     .catch(e => alert('Error: ' + e.message));
 }
@@ -6734,7 +6870,7 @@ function sendBidRequests() {
     sentDate: new Date().toISOString().split('T')[0]
   };
 
-  conDb.collection('jobs').doc(conCurrentJobId).collection('bidRequests').add(bidRequestData)
+  coll('jobs').doc(conCurrentJobId).collection('bidRequests').add(bidRequestData)
     .then(ref => {
       kClose('bidRequestModal');
 
@@ -6804,7 +6940,7 @@ Bid request saved — go to the Subs tab to track incoming bids.`);
 // ── Load and render bid requests for a job ──
 function loadJobBidRequests(jobId) {
   if (!conDb || !jobId) return;
-  conDb.collection('jobs').doc(jobId).collection('bidRequests')
+  coll('jobs').doc(jobId).collection('bidRequests')
     .orderBy('createdAt', 'desc').get()
     .then(snap => {
       _allBidRequests = [];
@@ -6912,7 +7048,7 @@ function saveBidEntry(status) {
     return v;
   });
 
-  conDb.collection('jobs').doc(conCurrentJobId).collection('bidRequests').doc(requestId)
+  coll('jobs').doc(conCurrentJobId).collection('bidRequests').doc(requestId)
     .update({ vendors, status: status === 'Awarded' ? 'Awarded' : req.status })
     .then(() => {
       kClose('enterBidModal');
@@ -6933,7 +7069,7 @@ function saveBidEntry(status) {
             notes: `Awarded from bid request. Bid: $${amount.toLocaleString()}`,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           };
-          conDb.collection('jobs').doc(conCurrentJobId).collection('subs').add(subData)
+          coll('jobs').doc(conCurrentJobId).collection('subs').add(subDoc(subData))
             .then(() => {
               renderSubList();
               alert(`🏆 Bid awarded to ${vendor.name} for $${amount.toLocaleString()}!
@@ -7005,7 +7141,7 @@ const COST_TYPES = ['Labor','Materials','Subcontractor','Equipment','Permits & F
 // ── Load estimate from Firestore ──
 function loadEstimate(jobId) {
   if (!conDb || !jobId) return;
-  conDb.collection('jobs').doc(jobId).collection('estimateGroups')
+  coll('jobs').doc(jobId).collection('estimateGroups')
     .orderBy('order').get()
     .then(snap => {
       estGroups = [];
@@ -7014,7 +7150,7 @@ function loadEstimate(jobId) {
         const group = { id: doc.id, ...doc.data(), subgroups: [] };
         estGroups.push(group);
         // Load subgroups
-        const p = conDb.collection('jobs').doc(jobId).collection('estimateGroups')
+        const p = coll('jobs').doc(jobId).collection('estimateGroups')
           .doc(doc.id).collection('subgroups').orderBy('order').get()
           .then(subSnap => {
             const subPromises = [];
@@ -7022,7 +7158,7 @@ function loadEstimate(jobId) {
               const subgroup = { id: subDoc.id, ...subDoc.data(), items: [] };
               group.subgroups.push(subgroup);
               // Load items
-              const sp = conDb.collection('jobs').doc(jobId).collection('estimateGroups')
+              const sp = coll('jobs').doc(jobId).collection('estimateGroups')
                 .doc(doc.id).collection('subgroups').doc(subDoc.id).collection('items')
                 .orderBy('order').get()
                 .then(itemSnap => {
@@ -7033,7 +7169,7 @@ function loadEstimate(jobId) {
               subPromises.push(sp);
             });
             // Also load items directly on group (no subgroup)
-            const dp = conDb.collection('jobs').doc(jobId).collection('estimateGroups')
+            const dp = coll('jobs').doc(jobId).collection('estimateGroups')
               .doc(doc.id).collection('items').orderBy('order').get()
               .then(itemSnap => {
                 if (!group.directItems) group.directItems = [];
@@ -7208,7 +7344,7 @@ function updateEstimateSummary() {
 
   // Update job contract value
   if (conCurrentJobId && conDb && totalPrice > 0) {
-    conDb.collection('jobs').doc(conCurrentJobId).update({
+    coll('jobs').doc(conCurrentJobId).update({
       contractValue: totalPrice, estCost: totalCost
     }).catch(()=>{});
   }
@@ -7263,7 +7399,7 @@ function openEditGroupModal(groupId) { openAddGroupModal(groupId); }
 function addGroup(name) {
   if (!conDb || !conCurrentJobId) return;
   const order = estGroups.length;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups').add({
+  coll('jobs').doc(conCurrentJobId).collection('estimateGroups').add({
     name, order, createdAt: firebase.firestore.FieldValue.serverTimestamp()
   }).then(ref => {
     estGroups.push({ id: ref.id, name, order, subgroups: [], directItems: [] });
@@ -7274,7 +7410,7 @@ function addGroup(name) {
 
 function updateGroup(groupId, name) {
   if (!conDb || !conCurrentJobId) return;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups').doc(groupId)
+  coll('jobs').doc(conCurrentJobId).collection('estimateGroups').doc(groupId)
     .update({ name })
     .then(() => {
       const g = estGroups.find(x => x.id === groupId);
@@ -7285,7 +7421,7 @@ function updateGroup(groupId, name) {
 
 function deleteGroup(groupId) {
   if (!confirm('Delete this group and ALL its items?')) return;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups').doc(groupId)
+  coll('jobs').doc(conCurrentJobId).collection('estimateGroups').doc(groupId)
     .delete().then(() => {
       estGroups = estGroups.filter(g => g.id !== groupId);
       renderEstimateTree();
@@ -7356,7 +7492,7 @@ function saveSubgroupName() {
   const group = estGroups.find(g => g.id === groupId);
 
   if (editSubId) {
-    conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups')
+    coll('jobs').doc(conCurrentJobId).collection('estimateGroups')
       .doc(groupId).collection('subgroups').doc(editSubId).update({ name })
       .then(function() {
         const sub = group?.subgroups?.find(s => s.id === editSubId);
@@ -7365,7 +7501,7 @@ function saveSubgroupName() {
       }).catch(function(e) { alert('Error: ' + e.message); });
   } else {
     const order = group?.subgroups?.length || 0;
-    conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups')
+    coll('jobs').doc(conCurrentJobId).collection('estimateGroups')
       .doc(groupId).collection('subgroups').add({
         name: name, order: order, createdAt: firebase.firestore.FieldValue.serverTimestamp()
       }).then(function(ref) {
@@ -7382,7 +7518,7 @@ function openEditSubgroupModal(groupId, subId) { openAddSubgroupModal(groupId, s
 
 function deleteSubgroup(groupId, subId) {
   if (!confirm('Delete this subgroup and all its items?')) return;
-  conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups')
+  coll('jobs').doc(conCurrentJobId).collection('estimateGroups')
     .doc(groupId).collection('subgroups').doc(subId)
     .delete().then(() => {
       const group = estGroups.find(g => g.id === groupId);
@@ -7511,7 +7647,7 @@ function saveEstItem() {
 
   const groupId = _editingGroupId;
   const subgroupId = _editingSubgroupId;
-  const jobRef = conDb.collection('jobs').doc(conCurrentJobId);
+  const jobRef = coll('jobs').doc(conCurrentJobId);
   let colRef;
 
   if (subgroupId) {
@@ -7532,7 +7668,7 @@ function saveEstItem() {
 
 function deleteEstItem(itemId, groupId, subgroupId) {
   if (!confirm('Delete this line item?')) return;
-  const jobRef = conDb.collection('jobs').doc(conCurrentJobId);
+  const jobRef = coll('jobs').doc(conCurrentJobId);
   let colRef;
   if (subgroupId) {
     colRef = jobRef.collection('estimateGroups').doc(groupId).collection('subgroups').doc(subgroupId).collection('items');
@@ -7573,7 +7709,7 @@ function showCatalogPicker(groupId) {
 
   const catItems = items.filter(i => (i.category||'Other') === cat);
   catItems.forEach((item, i) => {
-    const jobRef = conDb.collection('jobs').doc(conCurrentJobId);
+    const jobRef = coll('jobs').doc(conCurrentJobId);
     jobRef.collection('estimateGroups').doc(groupId).collection('items').add({
       desc: item.description || item.name || '',
       qty: 1,
@@ -7812,7 +7948,7 @@ function loadFieldNotes(jobId) {
 
   if (statusEl) statusEl.textContent = 'Loading...';
 
-  conDb.collection('jobs').doc(jobId).get()
+  coll('jobs').doc(jobId).get()
     .then(doc => {
       const notes = doc.data()?.fieldNotes || '';
       textarea.value = notes;
@@ -7838,7 +7974,7 @@ function saveFieldNotes() {
   const notes = textarea.value;
   const now = new Date().toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
 
-  conDb.collection('jobs').doc(conCurrentJobId).update({
+  coll('jobs').doc(conCurrentJobId).update({
     fieldNotes: notes,
     fieldNotesUpdated: now,
     fieldNotesUpdatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -7936,7 +8072,7 @@ function openSmartAdd() {
     // Auto-create a group if none exists
     const name = 'General';
     if (!conDb || !conCurrentJobId) return;
-    conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups').add({
+    coll('jobs').doc(conCurrentJobId).collection('estimateGroups').add({
       name, order:0, createdAt: firebase.firestore.FieldValue.serverTimestamp()
     }).then(ref => {
       estGroups.push({ id: ref.id, name, order:0, subgroups:[], directItems:[] });
@@ -8178,7 +8314,7 @@ async function wizardAddToEstimate() {
 
   if (!group) {
     // Create new group for this room
-    const ref = await conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups').add({
+    const ref = await coll('jobs').doc(conCurrentJobId).collection('estimateGroups').add({
       name: roomName, order: estGroups.length,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -8190,7 +8326,7 @@ async function wizardAddToEstimate() {
   // Create subgroup for the trade
   let subgroup = group.subgroups?.find(s => s.name.toLowerCase() === tradeName.toLowerCase());
   if (!subgroup) {
-    const subRef = await conDb.collection('jobs').doc(conCurrentJobId).collection('estimateGroups')
+    const subRef = await coll('jobs').doc(conCurrentJobId).collection('estimateGroups')
       .doc(groupId).collection('subgroups').add({
         name: tradeName, order: group.subgroups?.length || 0,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -8222,7 +8358,7 @@ async function wizardAddToEstimate() {
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       };
       addPromises.push(
-        conDb.collection('jobs').doc(conCurrentJobId)
+        coll('jobs').doc(conCurrentJobId)
           .collection('estimateGroups').doc(groupId)
           .collection('subgroups').doc(subgroupId)
           .collection('items').add(matData)
@@ -8243,7 +8379,7 @@ async function wizardAddToEstimate() {
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       };
       addPromises.push(
-        conDb.collection('jobs').doc(conCurrentJobId)
+        coll('jobs').doc(conCurrentJobId)
           .collection('estimateGroups').doc(groupId)
           .collection('subgroups').doc(subgroupId)
           .collection('items').add(labData)
@@ -8410,7 +8546,7 @@ window.saveJob = function() {
   };
 
   if (conEditingJobId) {
-    conDb.collection('jobs').doc(conEditingJobId).update(data)
+    coll('jobs').doc(conEditingJobId).update(data)
       .then(() => kClose('newJobModal'))
       .catch(e => alert('Error saving: ' + e.message));
   } else {
@@ -8418,7 +8554,7 @@ window.saveJob = function() {
     data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
     data.createdBy = conCurrentUser ? conCurrentUser.email : 'unknown';
     data.actualCost = 0;
-    conDb.collection('jobs').add(data)
+    coll('jobs').add(data)
       .then(() => kClose('newJobModal'))
       .catch(e => alert('Error saving: ' + e.message));
   }
