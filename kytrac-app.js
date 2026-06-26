@@ -2670,79 +2670,216 @@ function renderInvLineItems() {
 }
 
 function addInvLineItem() {
-  // Show a searchable picker overlay
   const existing = document.getElementById('invLinePicker');
   if (existing) existing.remove();
-
   const picker = document.createElement('div');
   picker.id = 'invLinePicker';
-  picker.style.cssText = 'position:fixed;inset:0;background:rgba(0,5,14,.7);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px';
-  picker.innerHTML = `
-    <div style="background:rgba(6,14,28,.99);border:1px solid rgba(217,119,6,.35);border-radius:18px;padding:24px;max-width:520px;width:100%;max-height:80vh;display:flex;flex-direction:column">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div style="font-size:1rem;font-weight:800;color:#eaf0fb">Add Line Item</div>
-        <button onclick="document.getElementById('invLinePicker').remove()" style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer">✕</button>
-      </div>
-      <input id="invLinePickerSearch" placeholder="Search catalog items..." autocomplete="off"
-        style="width:100%;padding:10px 14px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:10px;color:#eaf0fb;font-size:.88rem;margin-bottom:12px;box-sizing:border-box"
-        oninput="renderInvLinePicker(this.value)" />
-      <div id="invLinePickerList" style="overflow-y:auto;flex:1"></div>
-      <div style="border-top:1px solid rgba(110,145,210,.12);padding-top:12px;margin-top:10px">
-        <button onclick="addBlankInvLine()" style="width:100%;padding:10px;background:transparent;border:1px solid rgba(217,119,6,.3);border-radius:10px;color:var(--amber);font-size:.84rem;font-weight:700;cursor:pointer">
-          ＋ Add blank custom line
-        </button>
-      </div>
-    </div>`;
+  picker.style.cssText = 'position:fixed;inset:0;background:rgba(0,5,14,.78);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px';
+  picker.innerHTML =
+    '<div id="invPickerBox" style="background:rgba(6,14,28,.99);border:1px solid rgba(217,119,6,.35);border-radius:18px;padding:24px;max-width:540px;width:100%;max-height:88vh;display:flex;flex-direction:column">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+    '<div id="invPickerTitle" style="font-size:1rem;font-weight:800;color:#eaf0fb">Add Line Item</div>' +
+    '<button onclick="document.getElementById(\'invLinePicker\').remove()" style="background:none;border:none;color:var(--muted);font-size:1.3rem;cursor:pointer;line-height:1">✕</button>' +
+    '</div>' +
+    '<div id="invPickerBody" style="flex:1;overflow-y:auto"></div>' +
+    '<div style="border-top:1px solid rgba(110,145,210,.1);padding-top:12px;margin-top:10px">' +
+    '<button onclick="window.addBlankInvLine()" style="width:100%;padding:9px;background:transparent;border:1px solid rgba(110,145,210,.15);border-radius:10px;color:var(--muted);font-size:.82rem;cursor:pointer">＋ Add blank custom line</button>' +
+    '</div></div>';
   document.body.appendChild(picker);
-  renderInvLinePicker('');
-  setTimeout(() => document.getElementById('invLinePickerSearch')?.focus(), 100);
+  window._invPickerStep = 'type';
+  window._invPickerType = null;
+  invPickerRender();
+}
+
+function invPickerRender() {
+  const body = document.getElementById('invPickerBody');
+  const title = document.getElementById('invPickerTitle');
+  if (!body) return;
+  const step = window._invPickerStep;
+  const total = getEstimateTotal();
+  const fmt = v => '$' + v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  if (step === 'type') {
+    if (title) title.textContent = 'What type of invoice?';
+    const types = [
+      { id: '502525', icon: '💰', label: '50 / 25 / 25 Schedule', sub: 'Deposit + 2 progress payments' },
+      { id: '333334', icon: '⅓', label: '1/3 Schedule', sub: 'Three equal payments' },
+      { id: 'full',   icon: '✅', label: 'Full Payment', sub: 'Invoice for the full amount' },
+      { id: 'custom', icon: '✏️', label: 'Custom Amount', sub: 'Enter any percentage or dollar amount' },
+      { id: 'catalog',icon: '📦', label: 'Catalog Items', sub: 'Pick individual items from your cost catalog' },
+      { id: 'estimate',icon:'📋', label: 'Import from Estimate', sub: 'Pull all estimate lines into this invoice' },
+    ];
+    body.innerHTML = types.map(t =>
+      '<div onclick="window.invPickerSelectType(\'' + t.id + '\')"' +
+      ' style="display:flex;align-items:center;gap:14px;padding:12px 14px;border-radius:12px;cursor:pointer;margin-bottom:8px;border:1px solid rgba(110,145,210,.12)"' +
+      ' onmouseover="this.style.background=\'rgba(217,119,6,.1)\';this.style.borderColor=\'rgba(217,119,6,.3)\'"' +
+      ' onmouseout="this.style.background=\'\';this.style.borderColor=\'rgba(110,145,210,.12)\'">' +
+      '<div style="font-size:1.4rem;width:32px;text-align:center">' + t.icon + '</div>' +
+      '<div><div style="font-size:.88rem;font-weight:700;color:#eaf0fb">' + t.label + '</div>' +
+      '<div style="font-size:.74rem;color:var(--muted)">' + t.sub + '</div></div>' +
+      '</div>'
+    ).join('');
+
+  } else if (step === 'payment') {
+    const type = window._invPickerType;
+    let payments = [];
+    if (type === '502525') {
+      if (title) title.textContent = 'Select Payment — 50/25/25';
+      payments = [
+        { pct:50, label:'Initial Deposit', sub:'50% — Due at signing' },
+        { pct:25, label:'Progress Payment', sub:'25% — Due at midpoint' },
+        { pct:25, label:'Final Payment',    sub:'25% — Due at completion' },
+      ];
+    } else if (type === '333334') {
+      if (title) title.textContent = 'Select Payment — 1/3 Schedule';
+      payments = [
+        { pct:33.33, label:'First Payment',  sub:'1/3 — Due at signing' },
+        { pct:33.33, label:'Second Payment', sub:'1/3 — Due at midpoint' },
+        { pct:33.34, label:'Final Payment',  sub:'1/3 — Due at completion' },
+      ];
+    }
+    const backBtn = '<button onclick="window._invPickerStep=\'type\';window.invPickerRender()" style="margin-bottom:14px;background:transparent;border:none;color:var(--muted);font-size:.82rem;cursor:pointer">← Back</button>';
+    body.innerHTML = backBtn + payments.map(p => {
+      const amt = total > 0 ? fmt(total * p.pct / 100) : p.pct + '%';
+      return '<div onclick="window.pickPaymentSchedule(' + p.pct + ',\'' + p.label + '\')"' +
+        ' style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-radius:12px;cursor:pointer;margin-bottom:8px;border:1px solid rgba(110,145,210,.12)"' +
+        ' onmouseover="this.style.background=\'rgba(217,119,6,.1)\';this.style.borderColor=\'rgba(217,119,6,.3)\'"' +
+        ' onmouseout="this.style.background=\'\';this.style.borderColor=\'rgba(110,145,210,.12)\'">' +
+        '<div><div style="font-size:.9rem;font-weight:700;color:#eaf0fb">' + p.label + '</div>' +
+        '<div style="font-size:.76rem;color:var(--muted)">' + p.sub + '</div></div>' +
+        '<div style="font-size:1.1rem;font-weight:900;color:var(--amber)">' + amt + '</div>' +
+        '</div>';
+    }).join('');
+
+  } else if (step === 'custom') {
+    if (title) title.textContent = 'Custom Amount';
+    const backBtn = '<button onclick="window._invPickerStep=\'type\';window.invPickerRender()" style="margin-bottom:14px;background:transparent;border:none;color:var(--muted);font-size:.82rem;cursor:pointer">← Back</button>';
+    body.innerHTML = backBtn +
+      '<div style="font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">By Percentage</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:18px">' +
+      '<input id="invCustomPct" type="number" min="1" max="100" placeholder="%" style="width:70px;padding:10px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:8px;color:#eaf0fb;font-size:.9rem;text-align:center" oninput="window.updateCustomPayPreview()" />' +
+      '<div style="color:var(--muted)">% of ' + fmt(total) + ' =</div>' +
+      '<div id="invCustomPctAmt" style="font-weight:800;color:var(--amber);min-width:80px">$0.00</div>' +
+      '<button onclick="window.pickCustomPct()" style="padding:10px 16px;background:var(--amber);border:none;border-radius:8px;color:#fff;font-weight:700;cursor:pointer">Add</button>' +
+      '</div>' +
+      '<div style="font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Fixed Dollar Amount</div>' +
+      '<div style="display:flex;gap:8px;align-items:center">' +
+      '<input id="invCustomAmt" type="number" min="0" step="0.01" placeholder="$0.00" style="width:110px;padding:10px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:8px;color:#eaf0fb;font-size:.9rem" />' +
+      '<input id="invCustomDesc" placeholder="Description" style="flex:1;padding:10px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:8px;color:#eaf0fb;font-size:.88rem" />' +
+      '<button onclick="window.pickCustomAmt()" style="padding:10px 16px;background:var(--amber);border:none;border-radius:8px;color:#fff;font-weight:700;cursor:pointer">Add</button>' +
+      '</div>';
+
+  } else if (step === 'catalog') {
+    if (title) title.textContent = 'Catalog Items';
+    const backBtn = '<button onclick="window._invPickerStep=\'type\';window.invPickerRender()" style="margin-bottom:10px;background:transparent;border:none;color:var(--muted);font-size:.82rem;cursor:pointer">← Back</button>';
+    body.innerHTML = backBtn +
+      '<input id="invLinePickerSearch" placeholder="Search catalog items..." autocomplete="off"' +
+      ' style="width:100%;padding:10px 14px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:10px;color:#eaf0fb;font-size:.88rem;margin-bottom:10px;box-sizing:border-box"' +
+      ' oninput="window.renderInvLinePicker(this.value)" />' +
+      '<div id="invLinePickerList"></div>';
+    renderInvLinePicker('');
+    setTimeout(() => document.getElementById('invLinePickerSearch')?.focus(), 100);
+  }
+}
+
+function invPickerSelectType(typeId) {
+  if (typeId === '502525' || typeId === '333334') {
+    window._invPickerType = typeId;
+    window._invPickerStep = 'payment';
+    invPickerRender();
+  } else if (typeId === 'full') {
+    const total = getEstimateTotal();
+    _invLineItems.push({ desc: 'Payment in Full', qty: 1, rate: total || 0 });
+    renderInvLineItems();
+    calcInvTotals();
+    document.getElementById('invLinePicker')?.remove();
+  } else if (typeId === 'custom') {
+    window._invPickerStep = 'custom';
+    invPickerRender();
+  } else if (typeId === 'catalog') {
+    window._invPickerStep = 'catalog';
+    invPickerRender();
+  } else if (typeId === 'estimate') {
+    document.getElementById('invLinePicker')?.remove();
+    importEstimateToInvoice();
+  }
+}
+
+function getEstimateTotal() {
+  const jobId = document.getElementById('invJobId')?.value;
+  const job = conJobs.find(j => j.id === jobId);
+  return job?.contractValue || job?.approvedOrders || 0;
+}
+
+function updateCustomPayPreview() {
+  const pct = parseFloat(document.getElementById('invCustomPct')?.value) || 0;
+  const total = getEstimateTotal();
+  const el = document.getElementById('invCustomPctAmt');
+  if (el) el.textContent = '$' + (total * pct / 100).toFixed(2);
+}
+
+function pickPaymentSchedule(pct, desc) {
+  const total = getEstimateTotal();
+  const rate = total > 0 ? Math.round(total * pct / 100 * 100) / 100 : 0;
+  _invLineItems.push({ desc, qty: 1, rate });
+  renderInvLineItems();
+  calcInvTotals();
+  document.getElementById('invLinePicker')?.remove();
+}
+
+function pickCustomPct() {
+  const pct = parseFloat(document.getElementById('invCustomPct')?.value) || 0;
+  if (!pct) { alert('Enter a percentage.'); return; }
+  const total = getEstimateTotal();
+  const rate = Math.round(total * pct / 100 * 100) / 100;
+  _invLineItems.push({ desc: pct + '% Payment', qty: 1, rate });
+  renderInvLineItems();
+  calcInvTotals();
+  document.getElementById('invLinePicker')?.remove();
+}
+
+function pickCustomAmt() {
+  const rate = parseFloat(document.getElementById('invCustomAmt')?.value) || 0;
+  const desc = document.getElementById('invCustomDesc')?.value.trim() || 'Custom Payment';
+  if (!rate) { alert('Enter an amount.'); return; }
+  _invLineItems.push({ desc, qty: 1, rate });
+  renderInvLineItems();
+  calcInvTotals();
+  document.getElementById('invLinePicker')?.remove();
 }
 
 function renderInvLinePicker(q) {
   const list = document.getElementById('invLinePickerList');
   if (!list) return;
-  const val = q.trim().toLowerCase();
-
+  const val = (q || '').trim().toLowerCase();
   let items = catalogItems.filter(i => i.unitCost > 0);
   if (val) items = items.filter(i => (i.desc||'').toLowerCase().includes(val) || (i.category||'').toLowerCase().includes(val));
-
   if (!items.length) {
-    list.innerHTML = `<div style="color:var(--muted);font-size:.84rem;font-style:italic;padding:16px;text-align:center">${val ? 'No matches — use blank line below' : 'No catalog items yet'}</div>`;
+    list.innerHTML = '<div style="color:var(--muted);font-size:.84rem;font-style:italic;padding:16px;text-align:center">' + (val ? 'No matches' : 'No catalog items yet') + '</div>';
     return;
   }
-
-  // Group by category
   const groups = {};
-  items.forEach(i => {
-    const cat = i.category || 'Other';
-    if (!groups[cat]) groups[cat] = [];
-    groups[cat].push(i);
-  });
-
-  list.innerHTML = Object.entries(groups).map(([cat, catItems]) => `
-    <div style="margin-bottom:8px">
-      <div style="font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:4px 0 6px">${cat}</div>
-      ${catItems.map(item => {
-        const sell = (item.unitCost || 0) * (1 + (item.markup || 0) / 100);
-        return `<div onclick="pickInvLineItem('${item.id}')"
-          style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-radius:8px;cursor:pointer;margin-bottom:3px;border:1px solid transparent"
-          onmouseover="this.style.background='rgba(217,119,6,.1)';this.style.borderColor='rgba(217,119,6,.2)'"
-          onmouseout="this.style.background='';this.style.borderColor='transparent'">
-          <div>
-            <div style="font-size:.85rem;font-weight:600;color:#eaf0fb">${esc(item.desc||'')}</div>
-            <div style="font-size:.73rem;color:var(--muted)">${item.unit||'ea'}</div>
-          </div>
-          <div style="text-align:right;font-size:.84rem;font-weight:700;color:var(--amber)">$${sell.toFixed(2)}</div>
-        </div>`;
-      }).join('')}
-    </div>`).join('');
+  items.forEach(i => { const cat = i.category||'Other'; if (!groups[cat]) groups[cat]=[]; groups[cat].push(i); });
+  list.innerHTML = Object.entries(groups).map(([cat, catItems]) => {
+    const itemRows = catItems.map(item => {
+      const sell = (item.unitCost||0) * (1 + (item.markup||0)/100);
+      return '<div onclick="window.pickInvLineItem(\'' + item.id + '\')"' +
+        ' style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-radius:8px;cursor:pointer;margin-bottom:3px;border:1px solid transparent"' +
+        ' onmouseover="this.style.background=\'rgba(217,119,6,.1)\';this.style.borderColor=\'rgba(217,119,6,.2)\'"' +
+        ' onmouseout="this.style.background=\'\';this.style.borderColor=\'transparent\'">' +
+        '<div><div style="font-size:.85rem;font-weight:600;color:#eaf0fb">' + esc(item.desc||'') + '</div>' +
+        '<div style="font-size:.73rem;color:var(--muted)">' + (item.unit||'ea') + '</div></div>' +
+        '<div style="font-size:.84rem;font-weight:700;color:var(--amber)">$' + sell.toFixed(2) + '</div></div>';
+    }).join('');
+    return '<div style="margin-bottom:8px"><div style="font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:4px 0 6px">' + cat + '</div>' + itemRows + '</div>';
+  }).join('');
 }
 
 function pickInvLineItem(itemId) {
   const item = catalogItems.find(i => i.id === itemId);
   if (!item) return;
-  const sell = (item.unitCost || 0) * (1 + (item.markup || 0) / 100);
-  _invLineItems.push({ desc: item.desc || '', qty: 1, rate: sell });
+  const sell = (item.unitCost||0) * (1 + (item.markup||0)/100);
+  _invLineItems.push({ desc: item.desc||'', qty: 1, rate: sell });
   renderInvLineItems();
   calcInvTotals();
   document.getElementById('invLinePicker')?.remove();
@@ -2756,9 +2893,16 @@ function addBlankInvLine() {
 }
 
 window.addInvLineItem = addInvLineItem;
+window.invPickerRender = invPickerRender;
+window.invPickerSelectType = invPickerSelectType;
 window.renderInvLinePicker = renderInvLinePicker;
 window.pickInvLineItem = pickInvLineItem;
+window.pickPaymentSchedule = pickPaymentSchedule;
+window.pickCustomPct = pickCustomPct;
+window.pickCustomAmt = pickCustomAmt;
+window.updateCustomPayPreview = updateCustomPayPreview;
 window.addBlankInvLine = addBlankInvLine;
+
 
 function calcInvTotals() {
   const subtotal = _invLineItems.reduce((s,i) => s + (i.qty||1)*(i.rate||0), 0);
