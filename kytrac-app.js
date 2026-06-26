@@ -3019,9 +3019,9 @@ function clearLogo() {
 
 // ── Update sidebar with company name ──
 function updateSidebarUserInfo() {
-  const logoTag = document.querySelector('.kt-logo-tag');
-  if (logoTag && companyProfile.companyName) {
-    logoTag.textContent = companyProfile.companyName;
+  const companyTag = document.getElementById('ktCompanyTag');
+  if (companyTag && companyProfile.companyName) {
+    companyTag.textContent = companyProfile.companyName;
   }
 }
 
