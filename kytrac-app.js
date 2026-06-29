@@ -687,17 +687,22 @@ function openJobDetail(jobId) {
   document.getElementById('detailAccessInfo').textContent = job.accessInfo || job.notes?.match(/Access: (.+)/)?.[1] || '—';
   document.getElementById('detailNotes').textContent = job.notes || '';
 
-  // Map
+  // Map — using OpenStreetMap via nominatim (free, no API key)
   const mapAddress = job.address || '';
   const mapEl = document.getElementById('detailMap');
   const mapAddrEl = document.getElementById('detailMapAddress');
   if (mapAddrEl) mapAddrEl.textContent = mapAddress;
   if (mapEl && mapAddress) {
     const encodedAddr = encodeURIComponent(mapAddress);
-    mapEl.innerHTML = `<iframe
-      width="100%" height="220" frameborder="0" style="border:0"
-      src="https://www.google.com/maps/embed/v1/place?key=AIzaSyBWMNwGatEdsBsKdjZR01qyyPLBV516AF4&q=${encodedAddr}&zoom=14"
-      allowfullscreen loading="lazy"></iframe>`;
+    const gmapsUrl = 'https://www.google.com/maps/search/?api=1&query=' + encodedAddr;
+    // Use OpenStreetMap embed — completely free, no API key
+    mapEl.innerHTML = '<iframe ' +
+      'width="100%" height="220" frameborder="0" style="border:0;filter:hue-rotate(190deg) saturate(0.7) brightness(0.8)" ' +
+      'src="https://www.openstreetmap.org/export/embed.html?bbox=-180,-90,180,90&layer=mapnik&marker=0,0&query=' + encodedAddr + '" ' +
+      'loading="lazy"></iframe>' +
+      '<a href="' + gmapsUrl + '" target="_blank" ' +
+      'style="position:absolute;bottom:8px;right:8px;background:rgba(6,14,28,.9);border:1px solid rgba(217,119,6,.4);border-radius:6px;padding:4px 10px;font-size:.72rem;color:var(--amber);font-weight:700;text-decoration:none;z-index:10">🗺 Google Maps ↗</a>';
+    mapEl.style.position = 'relative';
   } else if (mapEl) {
     mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:.84rem">No address on file</div>';
   }
@@ -801,67 +806,333 @@ let conPhases = [];
 
 function conLoadPhases(jobId) {
   if (!conDb) return;
-  coll('jobs').doc(jobId).collection('phases').orderBy('startDate').onSnapshot(snap => {
+  coll('jobs').doc(jobId).collection('phases').orderBy('order').onSnapshot(snap => {
     conPhases = [];
     snap.forEach(doc => conPhases.push({ id: doc.id, ...doc.data() }));
-    renderPhaseList();
+    loadPhaseActualHours(jobId).then(() => {
+      renderPhaseKanban();
+      renderPhaseList();
+      updatePhaseHoursSummary();
+    });
+  }, () => {
+    coll('jobs').doc(jobId).collection('phases').onSnapshot(snap => {
+      conPhases = [];
+      snap.forEach(doc => conPhases.push({ id: doc.id, ...doc.data() }));
+      renderPhaseKanban();
+      renderPhaseList();
+      updatePhaseHoursSummary();
+    });
   });
+}
+
+async function loadPhaseActualHours(jobId) {
+  try {
+    const teSnap = await coll('timeentries').where('jobId','==',jobId).get();
+    const hoursByPhase = {};
+    teSnap.forEach(d => {
+      const data = d.data();
+      if (data.phaseId && data.hours) hoursByPhase[data.phaseId] = (hoursByPhase[data.phaseId]||0) + data.hours;
+    });
+    conPhases.forEach(p => { p._actualHours = hoursByPhase[p.id] || p.actualHours || 0; });
+  } catch(e) {
+    conPhases.forEach(p => { p._actualHours = p.actualHours || 0; });
+  }
+}
+
+function updatePhaseHoursSummary() {
+  const el = document.getElementById('phaseHoursSummary');
+  if (!el || !conPhases.length) return;
+  const totalEst = conPhases.reduce((s,p) => s + (p.estHours||0), 0);
+  const totalAct = conPhases.reduce((s,p) => s + (p._actualHours||0), 0);
+  const done = conPhases.filter(p => p.status === 'complete').length;
+  const color = totalAct > totalEst && totalEst > 0 ? '#f87171' : '#34d399';
+  el.innerHTML = '<span style="color:'+color+';font-weight:700">'+totalAct.toFixed(1)+'h actual</span> / '+totalEst.toFixed(1)+'h est · '+done+'/'+conPhases.length+' complete';
+}
+
+let _currentPhaseView = 'kanban';
+
+function switchPhaseView(view) {
+  _currentPhaseView = view;
+  const views = {kanban:'phaseKanbanView',gantt:'phaseGanttView',list:'phaseListView'};
+  const btns = {kanban:'phaseViewKanban',gantt:'phaseViewGantt',list:'phaseViewList'};
+  Object.entries(views).forEach(([k,id]) => { const el=document.getElementById(id); if(el) el.style.display=k===view?'block':'none'; });
+  Object.entries(btns).forEach(([k,id]) => {
+    const btn=document.getElementById(id); if(!btn) return;
+    if(k===view){btn.style.background='linear-gradient(135deg,var(--amber),var(--amber2))';btn.style.color='#fff';}
+    else{btn.style.background='transparent';btn.style.color='var(--muted)';}
+  });
+  if(view==='gantt') renderPhaseGantt();
+  if(view==='kanban') renderPhaseKanban();
+  if(view==='list') renderPhaseList();
+}
+
+function renderPhaseKanban() {
+  const lanes = {'not-started':document.getElementById('phaseLane0'),'in-progress':document.getElementById('phaseLane1'),'complete':document.getElementById('phaseLane2'),'blocked':document.getElementById('phaseLane3')};
+  const counts = {'not-started':0,'in-progress':0,'complete':0,'blocked':0};
+  Object.values(lanes).forEach(l => { if(l) l.innerHTML=''; });
+
+  conPhases.forEach(phase => {
+    const status = phase.status||'not-started';
+    counts[status] = (counts[status]||0)+1;
+    const lane = lanes[status];
+    if(!lane) return;
+    const color = phase.color||'#d97706';
+    const estH = phase.estHours||0;
+    const actH = phase._actualHours||0;
+    const pct = estH>0 ? Math.min(actH/estH*100,120) : 0;
+    const over = actH>estH && estH>0;
+    const barColor = over?'#f87171':(actH>0?'#34d399':'rgba(255,255,255,.15)');
+    const today = new Date().toISOString().split('T')[0];
+    const isBehind = phase.endDate && phase.endDate<today && status!=='complete';
+
+    const hoursHtml = estH>0 ?
+      '<div style="display:flex;justify-content:space-between;font-size:.72rem;margin-top:6px;padding-left:8px">'+
+      '<span style="color:'+(over?'#f87171':'var(--muted)')+'">⏱ '+actH.toFixed(1)+'h actual</span>'+
+      '<span style="color:var(--muted)">'+estH+'h est</span></div>'+
+      '<div class="phase-hours-bar"><div class="phase-hours-fill" style="width:'+Math.min(pct,100)+'%;background:'+barColor+'"></div></div>' : '';
+
+    const div = document.createElement('div');
+    div.className = 'phase-card';
+    div.draggable = true;
+    div.dataset.phaseId = phase.id;
+    div.innerHTML =
+      '<div class="phase-card-accent" style="background:'+color+'"></div>'+
+      '<div class="phase-card-name">'+esc(phase.name)+(isBehind?' <span style="color:#f87171;font-size:.7rem">⚠ Behind</span>':'')+'</div>'+
+      '<div class="phase-card-meta">'+(phase.assigned?'👤 '+esc(phase.assigned)+'<br>':'')+(phase.startDate?'📅 '+phase.startDate+(phase.endDate?' → '+phase.endDate:'')+'<br>':'')+(phase.trade?'🔧 '+esc(phase.trade):'')+'</div>'+
+      hoursHtml;
+    div.addEventListener('dragstart', e => { e.dataTransfer.setData('phaseId', phase.id); });
+    div.onclick = () => openEditPhaseModal(phase.id);
+    lane.appendChild(div);
+  });
+
+  ['not-started','in-progress','complete','blocked'].forEach((s,i) => {
+    const el = document.getElementById('laneCount'+i);
+    if(el) el.textContent = counts[s]||0;
+  });
+  if(!conPhases.length) {
+    const lane = lanes['not-started'];
+    if(lane) lane.innerHTML='<div style="color:var(--muted);font-size:.82rem;text-align:center;padding:20px">No phases yet.<br>Hit + Add Phase to start.</div>';
+  }
+}
+
+function phaseDropped(event, newStatus) {
+  event.preventDefault();
+  const phaseId = event.dataTransfer.getData('phaseId');
+  if(!phaseId||!conCurrentJobId) return;
+  const updates = {status:newStatus,updatedAt:firebase.firestore.FieldValue.serverTimestamp()};
+  if(newStatus==='in-progress') updates.actualStart = new Date().toISOString().split('T')[0];
+  if(newStatus==='complete') updates.actualEnd = new Date().toISOString().split('T')[0];
+  coll('jobs').doc(conCurrentJobId).collection('phases').doc(phaseId).update(updates);
+}
+
+function renderPhaseGantt() {
+  const wrap = document.getElementById('ganttWrap');
+  if(!wrap) return;
+  if(!conPhases.length){wrap.innerHTML='<div class="small muted" style="padding:20px;text-align:center">No phases to show</div>';return;}
+  const dates = conPhases.flatMap(p=>[p.startDate,p.endDate].filter(Boolean));
+  if(!dates.length){wrap.innerHTML='<div class="small muted" style="padding:20px;text-align:center">Add start/end dates to phases to see the Gantt chart</div>';return;}
+
+  const minDate = new Date(dates.reduce((a,b)=>a<b?a:b));
+  const maxDate = new Date(dates.reduce((a,b)=>a>b?a:b));
+  minDate.setDate(minDate.getDate()-7);
+  maxDate.setDate(maxDate.getDate()+14);
+  const totalDays = Math.ceil((maxDate-minDate)/86400000);
+  const dayWidth = Math.max(24,Math.floor(800/totalDays));
+  const totalWidth = totalDays*dayWidth;
+  const today = new Date();
+  const todayOffset = Math.floor((today-minDate)/86400000)*dayWidth;
+
+  const weekWidth = dayWidth*7;
+  let weekHeaders='',d=new Date(minDate);
+  while(d<maxDate){
+    const label=d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    weekHeaders+='<div class="gantt-week-label" style="width:'+weekWidth+'px">Wk '+getWeekNum(d)+'<br><span style="font-size:.64rem">'+label+'</span></div>';
+    d.setDate(d.getDate()+7);
+  }
+
+  const statusColors={'not-started':'#64748b','in-progress':'#3b82f6','complete':'#10b981','blocked':'#ef4444'};
+  const rows = conPhases.map(phase => {
+    if(!phase.startDate) return '<div class="gantt-row"><div class="gantt-label">'+esc(phase.name)+'</div><div class="gantt-bar-area" style="width:'+totalWidth+'px"><span style="color:var(--muted);font-size:.74rem;padding:12px 8px;display:block">No dates</span></div></div>';
+    const start=new Date(phase.startDate);
+    const end=phase.endDate?new Date(phase.endDate):new Date(start.getTime()+86400000*3);
+    const left=Math.floor((start-minDate)/86400000)*dayWidth;
+    const width=Math.max(dayWidth*2,Math.ceil((end-start)/86400000)*dayWidth);
+    const color=phase.color||statusColors[phase.status]||'#64748b';
+    const todayStr=new Date().toISOString().split('T')[0];
+    const isBehind=phase.endDate&&phase.endDate<todayStr&&phase.status!=='complete';
+    const actH=phase._actualHours||0;const estH=phase.estHours||0;
+    const hoursLabel=estH>0?' · '+actH.toFixed(1)+'/'+estH+'h':'';
+    return '<div class="gantt-row">'+
+      '<div class="gantt-label">'+esc(phase.name)+'<div style="font-size:.7rem;color:var(--muted)">'+esc(phase.assigned||'')+'</div></div>'+
+      '<div class="gantt-bar-area" style="width:'+totalWidth+'px;position:relative">'+
+      '<div class="gantt-bar'+(isBehind?' behind':'')+' " onclick="openEditPhaseModal(\''+phase.id+'\')" style="left:'+left+'px;width:'+width+'px;background:'+color+';opacity:'+(phase.status==='complete'?0.7:1)+'">'+
+      esc(phase.name)+hoursLabel+'</div>'+
+      (isBehind?'<div style="position:absolute;left:'+(left+width)+'px;top:12px;font-size:.7rem;color:#f87171;font-weight:700;white-space:nowrap"> ⚠ Behind</div>':'')+
+      '</div></div>';
+  }).join('');
+
+  wrap.innerHTML='<div style="display:flex"><div style="width:160px;flex-shrink:0"></div>'+
+    '<div class="gantt-header" style="width:'+totalWidth+'px;position:relative">'+weekHeaders+
+    '<div class="gantt-today-line" style="left:'+todayOffset+'px"></div></div></div>'+
+    rows+'<div style="margin-top:12px;font-size:.74rem;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap">'+
+    '<span>🔵 In Progress</span><span>✅ Complete</span><span style="color:#f87171">⚠ Behind</span>'+
+    '<span style="border-left:2px solid rgba(239,68,68,.7);padding-left:6px">Today</span></div>';
+}
+
+function getWeekNum(d) {
+  const date=new Date(d);date.setHours(0,0,0,0);date.setDate(date.getDate()+3-(date.getDay()+6)%7);
+  const week1=new Date(date.getFullYear(),0,4);
+  return 1+Math.round(((date.getTime()-week1.getTime())/86400000-3+(week1.getDay()+6)%7)/7);
 }
 
 function renderPhaseList() {
   const el = document.getElementById('phaseList');
   if (!el) return;
   if (!conPhases.length) { el.innerHTML = '<p class="muted">No phases added yet.</p>'; return; }
-  el.innerHTML = conPhases.map((p,i) => `
-    <div class="phase-row">
-      <div class="phase-status-dot ${p.status || 'not-started'}"></div>
-      <div style="flex:1">
-        <div style="font-weight:700">${p.name}</div>
-        <div class="small muted">${p.startDate || ''}${p.endDate ? ' → ' + p.endDate : ''} ${p.assigned ? '· ' + p.assigned : ''}</div>
-      </div>
-      <select style="font-size:.78rem;padding:4px 8px;background:rgba(8,18,36,.8);border:1px solid var(--amber-border);color:var(--text);border-radius:8px" onchange="updatePhaseStatus('${p.id}',this.value)">
-        <option value="not-started" ${p.status==='not-started'?'selected':''}>Not Started</option>
-        <option value="in-progress" ${p.status==='in-progress'?'selected':''}>In Progress</option>
-        <option value="complete" ${p.status==='complete'?'selected':''}>Complete</option>
-      </select>
-      <button class="btn btn-danger" style="padding:3px 8px;font-size:.75rem" onclick="deletePhase('${p.id}')">✕</button>
-    </div>
-  `).join('');
+
+  const sc = {'not-started':'#64748b','in-progress':'#3b82f6','complete':'#10b981','blocked':'#ef4444'};
+  const sl = {'not-started':'Not Started','in-progress':'In Progress','complete':'Complete','blocked':'Blocked'};
+  const today = new Date().toISOString().split('T')[0];
+
+  const table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:.84rem';
+  table.innerHTML = '<thead><tr style="border-bottom:2px solid rgba(110,145,210,.15)">' +
+    '<th style="text-align:left;padding:8px 10px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Phase</th>' +
+    '<th style="text-align:left;padding:8px 10px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Assigned</th>' +
+    '<th style="text-align:left;padding:8px 10px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Dates</th>' +
+    '<th style="text-align:right;padding:8px 10px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Est Hrs</th>' +
+    '<th style="text-align:right;padding:8px 10px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Act Hrs</th>' +
+    '<th style="text-align:left;padding:8px 10px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Status</th>' +
+    '</tr></thead>';
+
+  const tbody = document.createElement('tbody');
+  conPhases.forEach(p => {
+    const color = p.color || sc[p.status||'not-started'] || '#64748b';
+    const actH = p._actualHours || 0;
+    const estH = p.estHours || 0;
+    const over = actH > estH && estH > 0;
+    const behind = p.endDate && p.endDate < today && p.status !== 'complete';
+
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid rgba(110,145,210,.07);cursor:pointer';
+    tr.onmouseover = function() { this.style.background = 'rgba(217,119,6,.05)'; };
+    tr.onmouseout = function() { this.style.background = ''; };
+    tr.onclick = function() { openEditPhaseModal(p.id); };
+
+    tr.innerHTML =
+      '<td style="padding:10px"><div style="display:flex;align-items:center;gap:8px">' +
+      '<div style="width:4px;height:30px;background:'+color+';border-radius:2px;flex-shrink:0"></div>' +
+      '<div><div style="font-weight:700">'+esc(p.name)+'</div><div style="font-size:.73rem;color:var(--muted)">'+esc(p.trade||'')+'</div></div></div></td>' +
+      '<td style="padding:10px;color:var(--muted)">'+esc(p.assigned||'\u2014')+'</td>' +
+      '<td style="padding:10px;color:var(--muted);font-size:.8rem">'+(p.startDate||'\u2014')+(p.endDate?' \u2192 '+p.endDate:'')+(behind?' <span style="color:#f87171">\u26a0</span>':'')+'</td>' +
+      '<td style="padding:10px;text-align:right;font-weight:700">'+(estH||'\u2014')+'</td>' +
+      '<td style="padding:10px;text-align:right;font-weight:700;color:'+(over?'#f87171':actH>0?'#34d399':'var(--muted)')+'>'+(actH>0?actH.toFixed(1):'\u2014')+'</td>' +
+      '<td style="padding:10px"><span style="background:'+sc[p.status||'not-started']+'22;color:'+sc[p.status||'not-started']+';padding:2px 8px;border-radius:999px;font-size:.75rem;font-weight:700">'+sl[p.status||'not-started']+'</span></td>';
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  el.innerHTML = '';
+  el.appendChild(table);
 }
 
+
 function openAddPhaseModal() {
-  document.getElementById('phaseName').selectedIndex = 0;
-  document.getElementById('phaseStart').value = '';
-  document.getElementById('phaseEnd').value = '';
-  document.getElementById('phaseAssigned').value = '';
-  document.getElementById('phaseStatus').value = 'not-started';
+  document.getElementById('addPhaseModalTitle').textContent='Add Phase';
+  document.getElementById('editPhaseId').value='';
+  document.getElementById('phaseName').value='';
+  document.getElementById('phaseTrade').value='';
+  document.getElementById('phaseStart').value='';
+  document.getElementById('phaseEnd').value='';
+  document.getElementById('phaseAssigned').value='';
+  document.getElementById('phaseEstHours').value='';
+  document.getElementById('phaseStatus').value='not-started';
+  document.getElementById('phaseNotes').value='';
+  document.getElementById('phaseColor').value='#d97706';
+  document.getElementById('deletePhaseBtn').style.display='none';
+  document.querySelectorAll('.phase-color-opt').forEach(e=>e.classList.remove('selected'));
+  const firstOpt=document.querySelector('.phase-color-opt[data-color="#d97706"]');
+  if(firstOpt) firstOpt.classList.add('selected');
   kOpen('addPhaseModal');
 }
 
-function savePhase() {
-  if (!conCurrentJobId || !conDb) return;
-  const data = {
-    name: document.getElementById('phaseName').value,
-    startDate: document.getElementById('phaseStart').value,
-    endDate: document.getElementById('phaseEnd').value,
-    assigned: document.getElementById('phaseAssigned').value.trim(),
-    status: document.getElementById('phaseStatus').value,
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  };
-  coll('jobs').doc(conCurrentJobId).collection('phases').add(subDoc(data))
-    .then(() => { kClose('addPhaseModal'); switchDetailTab('phases', null); })
-    .catch(e => alert('Error: ' + e.message));
+function openEditPhaseModal(phaseId) {
+  const p=conPhases.find(x=>x.id===phaseId);if(!p) return;
+  document.getElementById('addPhaseModalTitle').textContent='Edit Phase';
+  document.getElementById('editPhaseId').value=phaseId;
+  document.getElementById('phaseName').value=p.name||'';
+  document.getElementById('phaseTrade').value=p.trade||'';
+  document.getElementById('phaseStart').value=p.startDate||'';
+  document.getElementById('phaseEnd').value=p.endDate||'';
+  document.getElementById('phaseAssigned').value=p.assigned||'';
+  document.getElementById('phaseEstHours').value=p.estHours||'';
+  document.getElementById('phaseStatus').value=p.status||'not-started';
+  document.getElementById('phaseNotes').value=p.notes||'';
+  document.getElementById('phaseColor').value=p.color||'#d97706';
+  document.getElementById('deletePhaseBtn').style.display='inline-flex';
+  document.querySelectorAll('.phase-color-opt').forEach(el=>el.classList.toggle('selected',el.dataset.color===(p.color||'#d97706')));
+  kOpen('addPhaseModal');
 }
 
-function updatePhaseStatus(phaseId, status) {
-  if (!conCurrentJobId || !conDb) return;
-  coll('jobs').doc(conCurrentJobId).collection('phases').doc(phaseId).update({ status });
+function selectPhaseColor(color,el) {
+  document.getElementById('phaseColor').value=color;
+  document.querySelectorAll('.phase-color-opt').forEach(e=>e.classList.remove('selected'));
+  if(el) el.classList.add('selected');
+}
+
+function savePhase() {
+  if(!conCurrentJobId||!conDb) return;
+  const name=document.getElementById('phaseName').value.trim();
+  if(!name){alert('Phase name is required.');return;}
+  const data={
+    name,trade:document.getElementById('phaseTrade').value,
+    startDate:document.getElementById('phaseStart').value,
+    endDate:document.getElementById('phaseEnd').value,
+    assigned:document.getElementById('phaseAssigned').value.trim(),
+    estHours:parseFloat(document.getElementById('phaseEstHours').value)||0,
+    status:document.getElementById('phaseStatus').value,
+    notes:document.getElementById('phaseNotes').value.trim(),
+    color:document.getElementById('phaseColor').value||'#d97706',
+    updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
+  };
+  const editId=document.getElementById('editPhaseId').value;
+  const ref=coll('jobs').doc(conCurrentJobId).collection('phases');
+  if(editId){
+    ref.doc(editId).update(data).then(()=>kClose('addPhaseModal')).catch(e=>alert('Error: '+e.message));
+  } else {
+    data.order=conPhases.length;data.createdAt=firebase.firestore.FieldValue.serverTimestamp();
+    ref.add(subDoc(data)).then(()=>kClose('addPhaseModal')).catch(e=>alert('Error: '+e.message));
+  }
+}
+
+function deleteCurrentPhase() {
+  const editId=document.getElementById('editPhaseId').value;
+  if(!editId||!conCurrentJobId) return;
+  if(!confirm('Delete this phase?')) return;
+  coll('jobs').doc(conCurrentJobId).collection('phases').doc(editId).delete().then(()=>kClose('addPhaseModal'));
+}
+
+function updatePhaseStatus(phaseId,status) {
+  if(!conCurrentJobId||!conDb) return;
+  coll('jobs').doc(conCurrentJobId).collection('phases').doc(phaseId).update({status});
 }
 
 function deletePhase(phaseId) {
-  if (!confirm('Delete this phase?')) return;
+  if(!confirm('Delete this phase?')) return;
   coll('jobs').doc(conCurrentJobId).collection('phases').doc(phaseId).delete();
 }
+
+window.switchPhaseView=switchPhaseView;
+window.phaseDropped=phaseDropped;
+window.openAddPhaseModal=openAddPhaseModal;
+window.openEditPhaseModal=openEditPhaseModal;
+window.selectPhaseColor=selectPhaseColor;
+window.savePhase=savePhase;
+window.deleteCurrentPhase=deleteCurrentPhase;
+window.updatePhaseStatus=updatePhaseStatus;
+window.deletePhase=deletePhase;
+
 
 // ── Daily Logs ──
 let conLogs = [];
@@ -1356,7 +1627,7 @@ window.renderJCDTable = renderJCDTable;
 // conLoadJobs CO patch removed — consolidated into main function above
 
 function switchDetailTab(tab, btn) {
-  const allTabs = ['dashboard','financials','estimate','changeorders','subs','phases','logs','invoices','documents','activity'];
+  const allTabs = ['dashboard','financials','estimate','changeorders','subs','phases','logs','invoices','documents','activity','retrospective'];
   allTabs.forEach(t => {
     const key = 'detail' + t.charAt(0).toUpperCase() + t.slice(1);
     const el = document.getElementById(key);
@@ -1377,6 +1648,7 @@ function switchDetailTab(tab, btn) {
   if (tab === 'logs') renderLogList();
   if (tab === 'invoices') loadJobInvoices(conCurrentJobId);
   if (tab === 'activity') loadJobActivity(conCurrentJobId, 'full');
+  if (tab === 'retrospective') loadRetrospective(conCurrentJobId);
 }
 
 
@@ -4161,26 +4433,29 @@ function clockIn() {
   if (!conDb || !conCurrentUser) return;
 
   const job = conJobs.find(j => j.id === jobId);
+  const phaseId = document.getElementById('clockPhaseSelect')?.value || '';
+  const phase = phaseId ? conPhases.find(p => p.id === phaseId) : null;
   const now = new Date();
+
   const entry = {
     userId: conCurrentUser.uid,
     userEmail: conCurrentUser.email || '',
     userName: conCurrentUser.displayName || conCurrentUser.email || '',
     jobId,
     jobName: job?.name || '',
+    phaseId: phaseId || '',
+    phaseName: phase?.name || '',
     clockIn: firebase.firestore.FieldValue.serverTimestamp(),
     clockInISO: now.toISOString(),
     clockOut: null,
     notes: document.getElementById('clockNotes')?.value.trim() || '',
     date: now.toISOString().split('T')[0],
-    hours: null
+    hours: null,
+    companyId: currentCompanyId,
   };
 
   coll('timeentries').add(entry)
-    .then(ref => {
-      _clockStart = now;
-      startClockTicker();
-    })
+    .then(() => { _clockStart = now; startClockTicker(); })
     .catch(e => alert('Error clocking in: ' + e.message));
 }
 
@@ -4201,6 +4476,103 @@ function clockOut() {
     if (notes) notes.value = '';
   }).catch(e => alert('Error clocking out: ' + e.message));
 }
+
+// ── Phase selectors for time entry ──
+async function loadClockPhases(jobId) {
+  const sel = document.getElementById('clockPhaseSelect');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">No phase selected</option>';
+  if (!jobId) return;
+
+  try {
+    const snap = await coll('jobs').doc(jobId).collection('phases').get();
+    const phases = [];
+    snap.forEach(d => phases.push({ id: d.id, ...d.data() }));
+    // Sort by order/status — active phases first
+    phases.sort((a,b) => {
+      const order = {'in-progress':0,'not-started':1,'blocked':2,'complete':3};
+      return (order[a.status]||1) - (order[b.status]||1);
+    });
+    phases.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      const statusLabel = p.status === 'in-progress' ? '🔵' : p.status === 'complete' ? '✅' : p.status === 'blocked' ? '🚫' : '⬜';
+      opt.textContent = statusLabel + ' ' + p.name + (p.assigned ? ' — ' + p.assigned : '');
+      sel.appendChild(opt);
+    });
+  } catch(e) {}
+}
+
+async function loadManualPhases(jobId) {
+  const sel = document.getElementById('manualPhaseSelect');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">No phase</option>';
+  if (!jobId) return;
+  try {
+    const snap = await coll('jobs').doc(jobId).collection('phases').get();
+    snap.forEach(d => {
+      const p = d.data();
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = p.name + (p.trade ? ' (' + p.trade + ')' : '');
+      sel.appendChild(opt);
+    });
+  } catch(e) {}
+}
+
+function saveManualTimeEntry() {
+  const jobId = document.getElementById('manualJobSelect')?.value;
+  const hours = parseFloat(document.getElementById('manualHours')?.value);
+  const date = document.getElementById('manualDate')?.value;
+  if (!jobId || !hours || !date) { alert('Job, hours, and date are required.'); return; }
+
+  const phaseId = document.getElementById('manualPhaseSelect')?.value || '';
+  const crew = document.getElementById('manualCrew')?.value.trim();
+  const notes = document.getElementById('manualNotes')?.value.trim();
+  const job = conJobs.find(j => j.id === jobId);
+  const phase = phaseId ? { id: phaseId } : null;
+
+  const entry = {
+    userId: crew ? '' : (conCurrentUser?.uid || ''),
+    userEmail: crew ? '' : (conCurrentUser?.email || ''),
+    userName: crew || conCurrentUser?.displayName || conCurrentUser?.email || '',
+    jobId,
+    jobName: job?.name || '',
+    phaseId,
+    phaseName: '',
+    date,
+    hours,
+    notes: notes || '',
+    manual: true,
+    companyId: currentCompanyId,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdBy: conCurrentUser?.email || '',
+  };
+
+  // Get phase name
+  if (phaseId) {
+    coll('jobs').doc(jobId).collection('phases').doc(phaseId).get().then(d => {
+      if (d.exists) entry.phaseName = d.data().name || '';
+      return coll('timeentries').add(entry);
+    }).then(() => {
+      document.getElementById('manualHours').value = '';
+      document.getElementById('manualNotes').value = '';
+      document.getElementById('manualCrew').value = '';
+      alert('✅ ' + hours + 'h logged' + (entry.phaseName ? ' to ' + entry.phaseName : ''));
+    }).catch(e => alert('Error: ' + e.message));
+  } else {
+    coll('timeentries').add(entry).then(() => {
+      document.getElementById('manualHours').value = '';
+      document.getElementById('manualNotes').value = '';
+      document.getElementById('manualCrew').value = '';
+      alert('✅ ' + hours + 'h logged');
+    }).catch(e => alert('Error: ' + e.message));
+  }
+}
+
+window.loadClockPhases = loadClockPhases;
+window.loadManualPhases = loadManualPhases;
+window.saveManualTimeEntry = saveManualTimeEntry;
 
 function startClockTicker() {
   if (_clockInterval) clearInterval(_clockInterval);
@@ -4293,13 +4665,28 @@ function renderTodaySummary() {
 }
 
 function populateTimeFilters() {
+  const activeStatuses = ['Work In Progress','Scheduled','Approved','Design Phase','Permitting','In Progress','Contracted'];
+  const activeJobs = conJobs.filter(j => activeStatuses.includes(j.status));
+
   const jobSel = document.getElementById('clockJobSelect');
   if (jobSel) {
     const cur = jobSel.value;
     jobSel.innerHTML = '<option value="">Select a job...</option>' +
-      conJobs.filter(j => ['Work In Progress','Scheduled','Approved','Design Phase','Permitting'].includes(j.status))
-        .map(j => `<option value="${j.id}" ${j.id===cur?'selected':''}>${esc(j.name)}</option>`).join('');
+      activeJobs.map(j => `<option value="${j.id}" ${j.id===cur?'selected':''}>${esc(j.jobNumber?'#'+j.jobNumber+' ':'')}${esc(j.name)}</option>`).join('');
   }
+
+  // Manual entry job selector
+  const manualJobSel = document.getElementById('manualJobSelect');
+  if (manualJobSel) {
+    const cur = manualJobSel.value;
+    manualJobSel.innerHTML = '<option value="">Select job...</option>' +
+      conJobs.map(j => `<option value="${j.id}" ${j.id===cur?'selected':''}>${esc(j.jobNumber?'#'+j.jobNumber+' ':'')}${esc(j.name)}</option>`).join('');
+  }
+
+  // Set today's date on manual entry
+  const manualDate = document.getElementById('manualDate');
+  if (manualDate && !manualDate.value) manualDate.value = new Date().toISOString().split('T')[0];
+
   const filterJobSel = document.getElementById('timeFilterJob');
   if (filterJobSel) {
     const cur2 = filterJobSel.value;
@@ -4336,6 +4723,7 @@ function renderTimeLog() {
     return `<tr>
       <td><div style="font-weight:600">${esc(e.userName||'')}</div><div style="font-size:.72rem;color:var(--muted)">${esc(e.userEmail||'')}</div></td>
       <td style="font-size:.82rem;color:var(--amber)">${esc(e.jobName||'—')}</td>
+      <td style="font-size:.78rem;color:#60a5fa">${e.phaseName ? '⚡ '+esc(e.phaseName) : '<span style="color:var(--muted)">—</span>'}</td>
       <td style="font-size:.82rem">${e.date||'—'}</td>
       <td style="font-size:.82rem">${inTime}</td>
       <td style="font-size:.82rem">${outTime || '<span class="clocked-in-badge" style="font-size:.68rem">● Live</span>'}</td>
@@ -4352,7 +4740,7 @@ function renderTimeLog() {
   }).join('');
 
   if (tfoot) tfoot.innerHTML = `<tr style="background:rgba(217,119,6,.06);font-weight:800">
-    <td colspan="5" style="padding:10px 12px;color:var(--amber)">TOTAL (${entries.filter(e=>e.hours).length} entries)</td>
+    <td colspan="6" style="padding:10px 12px;color:var(--amber)">TOTAL (${entries.filter(e=>e.hours).length} entries)</td>
     <td style="text-align:right;color:#a3f2d2">${totalHours.toFixed(2)}h</td>
     <td colspan="2"></td>
   </tr>`;
@@ -9234,19 +9622,25 @@ async function loadJobWeather(address) {
   el.innerHTML = '<div class="small muted">Loading weather...</div>';
 
   try {
-    // Geocode address using Google Maps Geocoding API
-    const geoRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=AIzaSyBWMNwGatEdsBsKdjZR01qyyPLBV516AF4`);
+    // Use Open-Meteo geocoding — free, no API key, no referrer restrictions
+    const city = address.split(',').slice(0,2).join(',').trim();
+    const geoRes = await fetch('https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(city) + '&count=1&language=en&format=json');
     const geoData = await geoRes.json();
-    if (!geoData.results?.length) { el.innerHTML = '<div class="small muted">Weather unavailable</div>'; return; }
-    const { lat, lng } = geoData.results[0].geometry.location;
 
-    // Open-Meteo free weather API
-    const wxRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,weathercode,windspeed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=7`);
+    let lat, lng;
+    if (geoData.results && geoData.results.length) {
+      lat = geoData.results[0].latitude;
+      lng = geoData.results[0].longitude;
+    } else {
+      lat = 38.6270; lng = -90.1994; // St. Louis fallback
+    }
+
+    const wxRes = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lng + '&current=temperature_2m,weathercode,windspeed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=7');
     const wx = await wxRes.json();
     const cur = wx.current;
     const daily = wx.daily;
 
-    const wmoIcon = code => {
+    const wmoIcon = function(code) {
       if (code === 0) return '☀️';
       if (code <= 3) return '⛅';
       if (code <= 49) return '🌫️';
@@ -9255,7 +9649,7 @@ async function loadJobWeather(address) {
       if (code <= 82) return '🌦️';
       return '⛈️';
     };
-    const wmoLabel = code => {
+    const wmoLabel = function(code) {
       if (code === 0) return 'Clear';
       if (code <= 3) return 'Partly Cloudy';
       if (code <= 49) return 'Foggy';
@@ -9266,26 +9660,25 @@ async function loadJobWeather(address) {
     };
 
     const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const dailyHtml = (daily.time || []).slice(0,7).map((date, i) => {
+    let dailyHtml = '';
+    (daily.time || []).slice(0,7).forEach(function(date, i) {
       const d = new Date(date + 'T12:00:00');
-      return `<div style="text-align:center;font-size:.75rem">
-        <div style="color:var(--muted)">${days[d.getDay()]}</div>
-        <div style="font-size:1rem">${wmoIcon(daily.weathercode[i])}</div>
-        <div style="font-weight:700;color:#eaf0fb">${Math.round(daily.temperature_2m_max[i])}°</div>
-        <div style="color:var(--muted)">${Math.round(daily.temperature_2m_min[i])}°</div>
-      </div>`;
-    }).join('');
+      dailyHtml += '<div style="text-align:center;font-size:.75rem">' +
+        '<div style="color:var(--muted)">' + days[d.getDay()] + '</div>' +
+        '<div style="font-size:1rem">' + wmoIcon(daily.weathercode[i]) + '</div>' +
+        '<div style="font-weight:700;color:#eaf0fb">' + Math.round(daily.temperature_2m_max[i]) + '°</div>' +
+        '<div style="color:var(--muted)">' + Math.round(daily.temperature_2m_min[i]) + '°</div>' +
+        '</div>';
+    });
 
-    el.innerHTML = `
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <div style="font-size:2.5rem">${wmoIcon(cur.weathercode)}</div>
-        <div>
-          <div style="font-size:1.6rem;font-weight:900;color:#eaf0fb">${Math.round(cur.temperature_2m)}°F</div>
-          <div style="font-size:.8rem;color:var(--muted)">${wmoLabel(cur.weathercode)} · Wind ${Math.round(cur.windspeed_10m)} mph</div>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">${dailyHtml}</div>`;
+    el.innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">' +
+      '<div style="font-size:2.5rem">' + wmoIcon(cur.weathercode) + '</div>' +
+      '<div><div style="font-size:1.6rem;font-weight:900;color:#eaf0fb">' + Math.round(cur.temperature_2m) + '°F</div>' +
+      '<div style="font-size:.8rem;color:var(--muted)">' + wmoLabel(cur.weathercode) + ' · Wind ' + Math.round(cur.windspeed_10m) + ' mph</div></div></div>' +
+      '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">' + dailyHtml + '</div>';
   } catch(e) {
+    console.error('Weather error:', e);
     el.innerHTML = '<div class="small muted">Weather unavailable</div>';
   }
 }
@@ -9445,6 +9838,373 @@ function uploadJobFiles(input) {
 }
 window.uploadJobFiles = uploadJobFiles;
 window.openJobPhotos = openJobPhotos;
+
+// ════════════════════════════════════════════════════
+// ── RETROSPECTIVE & BURNDOWN CHART ──
+// ════════════════════════════════════════════════════
+
+let _burndownChartInstance = null;
+
+async function loadRetrospective(jobId) {
+  if (!jobId || !conDb) return;
+
+  // Load time entries for this job
+  const teSnap = await coll('timeentries').where('jobId','==',jobId).get();
+  const timeEntries = [];
+  teSnap.forEach(d => timeEntries.push({ id: d.id, ...d.data() }));
+
+  // Also check logs with type=time
+  const logSnap = await coll('jobs').doc(jobId).collection('logs')
+    .where('type','==','time').get().catch(() => ({ forEach: ()=>{} }));
+  logSnap.forEach(d => timeEntries.push({ id: d.id, ...d.data() }));
+
+  renderBurndownChart(jobId, timeEntries);
+  renderRetroPhaseTable(timeEntries);
+  renderRetroInsights(timeEntries);
+  renderTradeAccuracy();
+}
+
+function renderBurndownChart(jobId, timeEntries) {
+  const canvas = document.getElementById('burndownChart');
+  const emptyEl = document.getElementById('burndownEmpty');
+  if (!canvas) return;
+
+  const totalEstHours = conPhases.reduce((s,p) => s + (p.estHours||0), 0);
+  if (!totalEstHours || !conPhases.length) {
+    canvas.style.display = 'none';
+    if (emptyEl) emptyEl.style.display = 'block';
+    return;
+  }
+  canvas.style.display = 'block';
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // Determine date range
+  const job = conJobs.find(j => j.id === jobId);
+  const startDate = job?.startDate || conPhases.map(p=>p.startDate).filter(Boolean).sort()[0];
+  const endDate = job?.endDate || conPhases.map(p=>p.endDate).filter(Boolean).sort().reverse()[0];
+  if (!startDate) { canvas.style.display='none'; if(emptyEl) emptyEl.style.display='block'; return; }
+
+  const start = new Date(startDate);
+  const end = endDate ? new Date(endDate) : new Date(start.getTime() + 30*86400000);
+  const today = new Date();
+  const chartEnd = today > end ? today : end;
+  const totalDays = Math.ceil((chartEnd - start) / 86400000) + 1;
+
+  // Build daily labels
+  const labels = [];
+  const idealLine = [];
+  const actualLine = [];
+  const d = new Date(start);
+  let remaining = totalEstHours;
+
+  // Sort time entries by date
+  const entriesByDay = {};
+  timeEntries.forEach(te => {
+    const date = (te.date || te.clockInISO || '').split('T')[0];
+    if (date) entriesByDay[date] = (entriesByDay[date] || 0) + (te.hours || 0);
+  });
+
+  for (let i = 0; i < totalDays; i++) {
+    const dateStr = d.toISOString().split('T')[0];
+    labels.push(d.toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+
+    // Ideal: linear burn
+    const idealRemaining = Math.max(0, totalEstHours * (1 - i/(totalDays-1)));
+    idealLine.push(parseFloat(idealRemaining.toFixed(2)));
+
+    // Actual: subtract hours logged on this day
+    if (d <= today) {
+      remaining = Math.max(0, remaining - (entriesByDay[dateStr] || 0));
+      actualLine.push(parseFloat(remaining.toFixed(2)));
+    } else {
+      actualLine.push(null);
+    }
+
+    d.setDate(d.getDate() + 1);
+  }
+
+  // Destroy existing chart
+  if (_burndownChartInstance) { _burndownChartInstance.destroy(); _burndownChartInstance = null; }
+
+  // Draw with Canvas2D (no library needed)
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 600;
+  const H = 200;
+  canvas.width = W;
+  canvas.height = H;
+
+  const pad = { top: 20, right: 20, bottom: 40, left: 50 };
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const maxVal = totalEstHours * 1.1;
+
+  const toX = i => pad.left + (i / (labels.length-1)) * chartW;
+  const toY = v => pad.top + chartH - (v / maxVal) * chartH;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(110,145,210,.1)';
+  ctx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const y = toY(maxVal * g / 4);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W-pad.right, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(148,163,184,.5)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText((maxVal*g/4).toFixed(0)+'h', pad.left-5, y+4);
+  }
+
+  // X axis labels (show ~6)
+  const step = Math.max(1, Math.floor(labels.length/6));
+  ctx.fillStyle = 'rgba(148,163,184,.6)';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  labels.forEach((lbl, i) => {
+    if (i % step === 0 || i === labels.length-1) {
+      ctx.fillText(lbl, toX(i), H - pad.bottom + 14);
+    }
+  });
+
+  // Today line
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayIdx = labels.length - actualLine.filter(v=>v!==null).length;
+  if (todayIdx >= 0 && todayIdx < labels.length) {
+    ctx.strokeStyle = 'rgba(239,68,68,.5)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4,3]);
+    ctx.beginPath();
+    ctx.moveTo(toX(actualLine.filter(v=>v!==null).length-1), pad.top);
+    ctx.lineTo(toX(actualLine.filter(v=>v!==null).length-1), H-pad.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Ideal line (dashed amber)
+  ctx.strokeStyle = 'rgba(217,119,6,.5)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6,4]);
+  ctx.beginPath();
+  idealLine.forEach((v,i) => {
+    if (i===0) ctx.moveTo(toX(i), toY(v));
+    else ctx.lineTo(toX(i), toY(v));
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Actual line (solid blue/green)
+  const actualData = actualLine.filter(v=>v!==null);
+  if (actualData.length > 1) {
+    const isAhead = actualData[actualData.length-1] <= idealLine[actualData.length-1];
+    ctx.strokeStyle = isAhead ? '#34d399' : '#f87171';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    actualData.forEach((v,i) => {
+      if (i===0) ctx.moveTo(toX(i), toY(v));
+      else ctx.lineTo(toX(i), toY(v));
+    });
+    ctx.stroke();
+  }
+
+  // Legend
+  ctx.font = '11px sans-serif';
+  ctx.fillStyle = 'rgba(217,119,6,.7)';
+  ctx.fillRect(pad.left, 5, 20, 3);
+  ctx.fillStyle = 'rgba(148,163,184,.8)';
+  ctx.textAlign = 'left';
+  ctx.fillText('Ideal', pad.left+24, 11);
+
+  ctx.fillStyle = actualData.length > 1 && actualData[actualData.length-1] <= idealLine[actualData.length-1] ? '#34d399' : '#f87171';
+  ctx.fillRect(pad.left+80, 5, 20, 3);
+  ctx.fillStyle = 'rgba(148,163,184,.8)';
+  ctx.fillText('Actual', pad.left+104, 11);
+
+  // Summary
+  const summaryEl = document.getElementById('burndownSummary');
+  if (summaryEl && actualData.length) {
+    const lastActual = actualData[actualData.length-1];
+    const lastIdeal = idealLine[actualData.length-1];
+    const diff = lastIdeal - lastActual;
+    const ahead = diff >= 0;
+    summaryEl.innerHTML =
+      '<div style="font-size:.9rem;font-weight:900;color:'+(ahead?'#34d399':'#f87171')+'">'+
+      (ahead?'▲ '+diff.toFixed(1)+'h ahead':'▼ '+Math.abs(diff).toFixed(1)+'h behind')+'</div>'+
+      '<div style="font-size:.75rem;color:var(--muted)">'+lastActual.toFixed(1)+'h remaining of '+totalEstHours+'h</div>';
+  }
+}
+
+function renderRetroPhaseTable(timeEntries) {
+  const el = document.getElementById('retroPhaseTable');
+  if (!el) return;
+  if (!conPhases.length) { el.innerHTML = '<div class="small muted">No phases on this job yet.</div>'; return; }
+
+  // Hours per phase from time entries
+  const hoursByPhase = {};
+  timeEntries.forEach(te => {
+    if (te.phaseId) hoursByPhase[te.phaseId] = (hoursByPhase[te.phaseId]||0) + (te.hours||0);
+  });
+
+  const table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:.84rem';
+  table.innerHTML = '<thead><tr style="border-bottom:2px solid rgba(110,145,210,.12)">' +
+    '<th style="text-align:left;padding:8px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Phase</th>' +
+    '<th style="text-align:right;padding:8px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Est Hours</th>' +
+    '<th style="text-align:right;padding:8px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Act Hours</th>' +
+    '<th style="text-align:right;padding:8px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Variance</th>' +
+    '<th style="text-align:left;padding:8px;font-size:.72rem;color:var(--muted);text-transform:uppercase">Accuracy</th>' +
+    '</tr></thead>';
+
+  const tbody = document.createElement('tbody');
+  let totalEst = 0, totalAct = 0;
+
+  conPhases.forEach(p => {
+    const estH = p.estHours || 0;
+    const actH = hoursByPhase[p.id] || p._actualHours || 0;
+    const variance = actH - estH;
+    const accuracy = estH > 0 ? (actH / estH * 100) : null;
+    const color = !accuracy ? 'var(--muted)' : accuracy <= 100 ? '#34d399' : accuracy <= 120 ? '#f59e0b' : '#f87171';
+    totalEst += estH; totalAct += actH;
+
+    // Mini progress bar
+    const barPct = estH > 0 ? Math.min(actH/estH*100, 150) : 0;
+    const barColor = !accuracy ? '#64748b' : accuracy <= 100 ? '#34d399' : accuracy <= 120 ? '#f59e0b' : '#f87171';
+
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid rgba(110,145,210,.07)';
+    tr.innerHTML =
+      '<td style="padding:10px 8px"><div style="font-weight:600">'+esc(p.name)+'</div><div style="font-size:.72rem;color:var(--muted)">'+esc(p.trade||'')+(p.assigned?' · '+esc(p.assigned):'')+'</div></td>' +
+      '<td style="padding:10px 8px;text-align:right;font-weight:700">'+(estH||'—')+'</td>' +
+      '<td style="padding:10px 8px;text-align:right;font-weight:700;color:'+(actH>0?color:'var(--muted)')+'>'+(actH>0?actH.toFixed(1):'—')+'</td>' +
+      '<td style="padding:10px 8px;text-align:right;font-weight:700;color:'+(variance>0?'#f87171':variance<0?'#34d399':'var(--muted)')+'>'+(estH>0?(variance>0?'+':'')+variance.toFixed(1)+'h':'—')+'</td>' +
+      '<td style="padding:10px 8px"><div style="display:flex;align-items:center;gap:8px">'+
+      (accuracy !== null ? '<div style="flex:1;background:rgba(255,255,255,.06);border-radius:4px;height:6px;overflow:hidden"><div style="width:'+Math.min(barPct,100)+'%;height:100%;background:'+barColor+'"></div></div><span style="font-size:.78rem;color:'+color+';font-weight:700;white-space:nowrap">'+accuracy.toFixed(0)+'%</span>' : '<span style="color:var(--muted);font-size:.78rem">No data</span>')+
+      '</div></td>';
+    tbody.appendChild(tr);
+  });
+
+  // Totals row
+  const totalVariance = totalAct - totalEst;
+  const totalAccuracy = totalEst > 0 ? (totalAct/totalEst*100) : null;
+  const totTr = document.createElement('tr');
+  totTr.style.cssText = 'border-top:2px solid rgba(110,145,210,.2);font-weight:800;background:rgba(110,145,210,.04)';
+  totTr.innerHTML =
+    '<td style="padding:10px 8px">TOTAL</td>' +
+    '<td style="padding:10px 8px;text-align:right">'+(totalEst.toFixed(1))+'h</td>' +
+    '<td style="padding:10px 8px;text-align:right;color:'+(totalAct>totalEst?'#f87171':'#34d399')+'">'+(totalAct.toFixed(1))+'h</td>' +
+    '<td style="padding:10px 8px;text-align:right;color:'+(totalVariance>0?'#f87171':totalVariance<0?'#34d399':'var(--muted)')+'">'+
+    (totalVariance>0?'+':'')+totalVariance.toFixed(1)+'h</td>' +
+    '<td style="padding:10px 8px">'+(totalAccuracy?'<span style="font-weight:900;color:'+(totalAccuracy<=100?'#34d399':totalAccuracy<=120?'#f59e0b':'#f87171')+'">'+totalAccuracy.toFixed(0)+'%</span>':'—')+'</td>';
+  tbody.appendChild(totTr);
+
+  table.appendChild(tbody);
+  el.innerHTML = '';
+  el.appendChild(table);
+}
+
+function renderRetroInsights(timeEntries) {
+  const el = document.getElementById('retroInsights');
+  if (!el) return;
+  if (!conPhases.length) { el.innerHTML = '<div class="small muted">No phases to analyze yet.</div>'; return; }
+
+  const insights = [];
+  const hoursByPhase = {};
+  timeEntries.forEach(te => {
+    if (te.phaseId) hoursByPhase[te.phaseId] = (hoursByPhase[te.phaseId]||0)+(te.hours||0);
+  });
+
+  conPhases.forEach(p => {
+    const estH = p.estHours || 0;
+    const actH = hoursByPhase[p.id] || p._actualHours || 0;
+    if (!estH || !actH) return;
+    const pct = actH/estH*100;
+    const trade = p.trade || 'General';
+
+    if (pct > 130) {
+      insights.push({ type: 'over', icon: '🔴', msg: `<strong>${esc(p.name)}</strong> ran ${(actH-estH).toFixed(1)}h over estimate (${pct.toFixed(0)}% of est). Consider raising ${trade} phase estimates by ~${Math.round((pct-100)/10)*10}%.` });
+    } else if (pct > 110) {
+      insights.push({ type: 'warn', icon: '🟡', msg: `<strong>${esc(p.name)}</strong> ran ${(actH-estH).toFixed(1)}h over (${pct.toFixed(0)}%). Slightly under-estimated — watch this trade.` });
+    } else if (pct < 70) {
+      insights.push({ type: 'under', icon: '🟢', msg: `<strong>${esc(p.name)}</strong> came in ${(estH-actH).toFixed(1)}h under estimate (${pct.toFixed(0)}%). You may be padding ${trade} phases — consider tightening estimates.` });
+    } else {
+      insights.push({ type: 'good', icon: '✅', msg: `<strong>${esc(p.name)}</strong> was well-estimated (${pct.toFixed(0)}% of estimate used).` });
+    }
+  });
+
+  // Overall job insight
+  const totalEst = conPhases.reduce((s,p)=>s+(p.estHours||0),0);
+  const totalAct = conPhases.reduce((s,p)=>s+(hoursByPhase[p.id]||p._actualHours||0),0);
+  if (totalEst > 0 && totalAct > 0) {
+    const pct = totalAct/totalEst*100;
+    if (pct > 115) insights.unshift({ type: 'over', icon: '⚠️', msg: `This job is <strong>${(totalAct-totalEst).toFixed(1)}h over budget overall</strong>. Review your estimation process for similar jobs.` });
+    else if (pct < 85) insights.unshift({ type: 'under', icon: '💡', msg: `This job came in <strong>${(totalEst-totalAct).toFixed(1)}h under budget</strong>. You may be over-estimating — this creates pricing room to compete.` });
+    else insights.unshift({ type: 'good', icon: '🎯', msg: `<strong>Strong estimation accuracy</strong> — this job is ${pct.toFixed(0)}% of the estimated hours. Well done.` });
+  }
+
+  if (!insights.length) { el.innerHTML = '<div class="small muted">Log time against phases to generate insights.</div>'; return; }
+
+  el.innerHTML = insights.map(ins =>
+    `<div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid rgba(110,145,210,.07)">
+      <div style="font-size:1.1rem;flex-shrink:0">${ins.icon}</div>
+      <div style="font-size:.84rem;line-height:1.5;color:#cbd5e1">${ins.msg}</div>
+    </div>`
+  ).join('');
+}
+
+async function renderTradeAccuracy() {
+  const el = document.getElementById('retroTradeAccuracy');
+  if (!el) return;
+  el.innerHTML = '<div class="small muted">Analyzing all jobs...</div>';
+
+  try {
+    // Gather phases across all jobs
+    const tradeStats = {}; // { trade: { totalEst, totalAct, count } }
+
+    // We already have conJobs - fetch phases for completed ones
+    const completedJobs = conJobs.filter(j => j.status === 'Complete' || j.status === 'Closed Won').slice(0, 20);
+    if (!completedJobs.length) {
+      el.innerHTML = '<div class="small muted">Complete some jobs to see trade accuracy trends.</div>';
+      return;
+    }
+
+    for (const job of completedJobs) {
+      const phaseSnap = await coll('jobs').doc(job.id).collection('phases').get();
+      phaseSnap.forEach(d => {
+        const p = d.data();
+        if (!p.estHours || !p.actualHours) return;
+        const trade = p.trade || 'General';
+        if (!tradeStats[trade]) tradeStats[trade] = { totalEst:0, totalAct:0, count:0 };
+        tradeStats[trade].totalEst += p.estHours;
+        tradeStats[trade].totalAct += p.actualHours;
+        tradeStats[trade].count++;
+      });
+    }
+
+    const trades = Object.entries(tradeStats).sort((a,b) => b[1].count - a[1].count);
+    if (!trades.length) {
+      el.innerHTML = '<div class="small muted">No completed phases with actual hours yet. Log time against phases to build this analysis.</div>';
+      return;
+    }
+
+    el.innerHTML = trades.map(([trade, stats]) => {
+      const pct = stats.totalEst > 0 ? (stats.totalAct/stats.totalEst*100) : 0;
+      const color = pct <= 100 ? '#34d399' : pct <= 120 ? '#f59e0b' : '#f87171';
+      return `<div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <div style="font-weight:700;font-size:.85rem">${esc(trade)}</div>
+          <div style="font-size:.82rem;color:${color};font-weight:800">${pct.toFixed(0)}% <span style="color:var(--muted);font-weight:400">(${stats.count} phases)</span></div>
+        </div>
+        <div style="background:rgba(255,255,255,.06);border-radius:6px;height:8px;overflow:hidden">
+          <div style="width:${Math.min(pct,150)}%;height:100%;background:${color};border-radius:6px;transition:width .5s"></div>
+        </div>
+        <div style="font-size:.73rem;color:var(--muted);margin-top:3px">${stats.totalAct.toFixed(1)}h actual vs ${stats.totalEst.toFixed(1)}h estimated</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="small muted">Could not load trade data.</div>';
+  }
+}
+
+window.loadRetrospective = loadRetrospective;
 
 // Boot
 conLoadFirebase();

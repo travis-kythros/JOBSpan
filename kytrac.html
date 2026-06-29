@@ -327,6 +327,32 @@
     .activity-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(110,145,210,.07); font-size: .82rem; }
     .activity-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .8rem; flex-shrink: 0; background: rgba(110,145,210,.12); }
     .activity-meta { font-size: .73rem; color: var(--muted); margin-top: 2px; }
+
+    /* Phase Kanban */
+    .phase-kanban { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; min-height: 400px; }
+    .phase-lane { background: rgba(8,18,36,.6); border: 1px solid rgba(110,145,210,.12); border-radius: 12px; padding: 12px; min-height: 300px; }
+    .phase-lane-header { font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+    .phase-card { background: rgba(15,28,54,.9); border: 1px solid rgba(110,145,210,.15); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; transition: border-color .15s, transform .1s; position: relative; overflow: clip; }
+    .phase-card:hover { border-color: rgba(217,119,6,.4); transform: translateY(-1px); }
+    .phase-card-accent { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 10px 0 0 10px; }
+    .phase-card-name { font-weight: 700; font-size: .88rem; margin-bottom: 5px; padding-left: 8px; }
+    .phase-card-meta { font-size: .74rem; color: var(--muted); padding-left: 8px; line-height: 1.5; }
+    .phase-hours-bar { height: 4px; background: rgba(255,255,255,.08); border-radius: 999px; margin: 8px 0 0; overflow: hidden; }
+    .phase-hours-fill { height: 100%; border-radius: 999px; transition: width .3s; }
+    .phase-color-opt { width: 24px; height: 24px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: border-color .15s, transform .1s; }
+    .phase-color-opt.selected { border-color: #fff; transform: scale(1.2); }
+
+    /* Gantt Chart */
+    .gantt-wrap { overflow-x: auto; }
+    .gantt-row { display: flex; align-items: center; gap: 0; min-height: 44px; border-bottom: 1px solid rgba(110,145,210,.07); }
+    .gantt-label { width: 160px; flex-shrink: 0; font-size: .82rem; font-weight: 600; padding: 8px 10px; color: #eaf0fb; border-right: 1px solid rgba(110,145,210,.1); }
+    .gantt-bar-area { flex: 1; position: relative; min-height: 44px; }
+    .gantt-bar { position: absolute; height: 28px; top: 8px; border-radius: 6px; display: flex; align-items: center; padding: 0 8px; font-size: .72rem; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; cursor: pointer; transition: opacity .15s; }
+    .gantt-bar:hover { opacity: .85; }
+    .gantt-bar.behind { background-image: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,.15) 4px, rgba(0,0,0,.15) 8px); }
+    .gantt-today-line { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(239,68,68,.7); z-index: 10; }
+    .gantt-header { display: flex; min-height: 32px; border-bottom: 2px solid rgba(110,145,210,.2); }
+    .gantt-week-label { font-size: .7rem; font-weight: 700; color: var(--muted); text-align: center; border-right: 1px solid rgba(110,145,210,.08); flex-shrink: 0; padding: 6px 0; }
     .kt-board-wrap::-webkit-scrollbar-track { background: rgba(255,255,255,.04); border-radius: 4px; }
     .kt-board-wrap::-webkit-scrollbar-thumb { background: var(--amber-border); border-radius: 4px; }
     .kt-board {
@@ -859,7 +885,7 @@
     <div class="kt-logo">
       <div class="kt-logo-mark">⚡ KYTRAC</div>
       <div class="kt-logo-tag" id="ktCompanyTag">7 Pillars Contracting</div>
-      <div class="kt-logo-version" id="ktVersionTag">Version 1.8.0 · 29/Jun/2026</div>
+      <div class="kt-logo-version" id="ktVersionTag">Version 1.8.5 · 29/Jun/2026</div>
     </div>
 
     <nav class="kt-nav">
@@ -1184,10 +1210,17 @@
               <div style="font-size:.82rem;color:var(--muted);margin-top:6px" id="clockStatusLabel">Not clocked in</div>
             </div>
             <!-- Job selector -->
-            <div style="margin-bottom:14px">
-              <label class="small muted" style="display:block;margin-bottom:6px">Job</label>
-              <select id="clockJobSelect" style="font-size:.88rem;padding:10px 14px;background:rgba(8,19,37,.9);border:1px solid var(--amber-border);color:#eaf0fb;border-radius:10px;width:100%">
+            <div style="margin-bottom:12px">
+              <label class="small muted" style="display:block;margin-bottom:6px">Job *</label>
+              <select id="clockJobSelect" onchange="loadClockPhases(this.value)" style="font-size:.88rem;padding:10px 14px;background:rgba(8,19,37,.9);border:1px solid var(--amber-border);color:#eaf0fb;border-radius:10px;width:100%">
                 <option value="">Select a job...</option>
+              </select>
+            </div>
+            <!-- Phase selector — loads after job selected -->
+            <div style="margin-bottom:12px" id="clockPhaseRow">
+              <label class="small muted" style="display:block;margin-bottom:6px">Phase / Task</label>
+              <select id="clockPhaseSelect" style="font-size:.88rem;padding:10px 14px;background:rgba(8,19,37,.9);border:1px solid var(--amber-border);color:#eaf0fb;border-radius:10px;width:100%">
+                <option value="">Select a phase (optional)</option>
               </select>
             </div>
             <div style="margin-bottom:16px">
@@ -1202,24 +1235,64 @@
           </div>
         </div>
 
-        <!-- Today summary -->
-        <div class="kt-card">
-          <div class="kt-card-head">
-            <h3>📊 Today</h3>
-            <span class="small muted" id="timeTodayDate"></span>
-          </div>
-          <div class="kt-card-body">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
-              <div style="text-align:center;background:rgba(8,18,36,.6);border-radius:12px;padding:14px">
-                <div style="font-size:1.6rem;font-weight:900;color:var(--amber)" id="timeTodayHours">0.0h</div>
-                <div style="font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:3px">My Hours Today</div>
-              </div>
-              <div style="text-align:center;background:rgba(8,18,36,.6);border-radius:12px;padding:14px">
-                <div style="font-size:1.6rem;font-weight:900;color:#1dbb87" id="timeTodayTeam">0</div>
-                <div style="font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:3px">Team On Site</div>
-              </div>
+        <!-- Today summary + Manual Entry -->
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div class="kt-card">
+            <div class="kt-card-head">
+              <h3>📊 Today</h3>
+              <span class="small muted" id="timeTodayDate"></span>
             </div>
-            <div id="todayTimeEntries"></div>
+            <div class="kt-card-body">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+                <div style="text-align:center;background:rgba(8,18,36,.6);border-radius:12px;padding:14px">
+                  <div style="font-size:1.6rem;font-weight:900;color:var(--amber)" id="timeTodayHours">0.0h</div>
+                  <div style="font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:3px">My Hours Today</div>
+                </div>
+                <div style="text-align:center;background:rgba(8,18,36,.6);border-radius:12px;padding:14px">
+                  <div style="font-size:1.6rem;font-weight:900;color:#1dbb87" id="timeTodayTeam">0</div>
+                  <div style="font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:3px">Team On Site</div>
+                </div>
+              </div>
+              <div id="todayTimeEntries"></div>
+            </div>
+          </div>
+
+          <!-- Manual Time Entry -->
+          <div class="kt-card">
+            <div class="kt-card-head"><h3>✏️ Log Time Manually</h3></div>
+            <div class="kt-card-body" style="padding:16px">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                <div>
+                  <label class="small muted" style="display:block;margin-bottom:4px">Date</label>
+                  <input id="manualDate" type="date" style="width:100%;font-size:.85rem" />
+                </div>
+                <div>
+                  <label class="small muted" style="display:block;margin-bottom:4px">Hours *</label>
+                  <input id="manualHours" type="number" min="0.25" step="0.25" placeholder="1.5" style="width:100%;font-size:.85rem" />
+                </div>
+              </div>
+              <div style="margin-bottom:10px">
+                <label class="small muted" style="display:block;margin-bottom:4px">Job *</label>
+                <select id="manualJobSelect" onchange="loadManualPhases(this.value)" style="font-size:.85rem;padding:9px;background:rgba(8,19,37,.9);border:1px solid var(--amber-border);color:#eaf0fb;border-radius:8px;width:100%">
+                  <option value="">Select job...</option>
+                </select>
+              </div>
+              <div style="margin-bottom:10px">
+                <label class="small muted" style="display:block;margin-bottom:4px">Phase / Task</label>
+                <select id="manualPhaseSelect" style="font-size:.85rem;padding:9px;background:rgba(8,19,37,.9);border:1px solid var(--amber-border);color:#eaf0fb;border-radius:8px;width:100%">
+                  <option value="">No phase</option>
+                </select>
+              </div>
+              <div style="margin-bottom:12px">
+                <label class="small muted" style="display:block;margin-bottom:4px">Crew Member</label>
+                <input id="manualCrew" placeholder="Leave blank for yourself" style="font-size:.85rem" />
+              </div>
+              <div style="margin-bottom:12px">
+                <label class="small muted" style="display:block;margin-bottom:4px">Notes</label>
+                <input id="manualNotes" placeholder="What was done?" style="font-size:.85rem" />
+              </div>
+              <button class="btn-amber" onclick="saveManualTimeEntry()" style="width:100%;padding:10px;font-size:.88rem">Log Hours</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1242,7 +1315,7 @@
         <div style="overflow:auto;max-height:400px">
           <table class="kt-table">
             <thead><tr>
-              <th>Employee</th><th>Job</th><th>Date</th>
+              <th>Employee</th><th>Job</th><th>Phase</th><th>Date</th>
               <th>Clock In</th><th>Clock Out</th>
               <th style="text-align:right">Hours</th>
               <th>Notes</th><th></th>
@@ -2713,34 +2786,85 @@
 
   <!-- ── Add Phase Modal ── -->
   <div id="addPhaseModal" class="modal-overlay">
-    <div class="modal-box" style="max-width:480px">
-      <div class="modal-head"><h3 style="margin:0">Add Phase</h3><button class="btn" onclick="kClose('addPhaseModal')">Close</button></div>
+    <div class="modal-box" style="max-width:520px">
+      <div class="modal-head">
+        <h3 style="margin:0" id="addPhaseModalTitle">Add Phase</h3>
+        <button class="btn" onclick="kClose('addPhaseModal')">Close</button>
+      </div>
       <div class="modal-body">
+        <input type="hidden" id="editPhaseId" />
         <div class="form-grid">
-          <div class="full"><label class="small muted">Phase Name *</label>
-            <select id="phaseName">
+          <div class="full">
+            <label class="small muted">Phase Name *</label>
+            <input id="phaseName" placeholder="e.g. Cabinet Installation" list="phaseNameSuggestions" />
+            <datalist id="phaseNameSuggestions">
               <option>Demo</option><option>Site Prep</option><option>Foundation</option><option>Framing</option>
               <option>Roofing</option><option>Rough Electrical</option><option>Rough Plumbing</option>
               <option>HVAC Rough</option><option>Insulation</option><option>Drywall</option>
               <option>Paint</option><option>Cabinets</option><option>Flooring</option>
               <option>Trim & Finish</option><option>Finish Electrical</option><option>Finish Plumbing</option>
               <option>HVAC Finish</option><option>Tile</option><option>Countertops</option>
-              <option>Exterior</option><option>Landscaping</option><option>Final Inspection</option><option>Punch List</option>
+              <option>Fixtures</option><option>Appliances</option><option>Exterior</option>
+              <option>Landscaping</option><option>Final Inspection</option><option>Punch List</option>
+            </datalist>
+          </div>
+          <div>
+            <label class="small muted">Trade / Category</label>
+            <select id="phaseTrade">
+              <option value="">General</option>
+              <option>Carpentry</option><option>Electrical</option><option>Plumbing</option>
+              <option>HVAC</option><option>Flooring</option><option>Tile</option>
+              <option>Painting</option><option>Roofing</option><option>Concrete</option>
+              <option>Landscaping</option><option>Demo</option><option>Other</option>
             </select>
           </div>
-          <div><label class="small muted">Start Date</label><input id="phaseStart" type="date" /></div>
-          <div><label class="small muted">End Date</label><input id="phaseEnd" type="date" /></div>
-          <div class="full"><label class="small muted">Assigned To</label><input id="phaseAssigned" placeholder="Crew member or sub name" /></div>
-          <div class="full"><label class="small muted">Status</label>
+          <div>
+            <label class="small muted">Assigned To</label>
+            <input id="phaseAssigned" placeholder="Crew member or sub" />
+          </div>
+          <div>
+            <label class="small muted">Start Date</label>
+            <input id="phaseStart" type="date" />
+          </div>
+          <div>
+            <label class="small muted">End Date</label>
+            <input id="phaseEnd" type="date" />
+          </div>
+          <div>
+            <label class="small muted">Est. Hours</label>
+            <input id="phaseEstHours" type="number" min="0" step="0.25" placeholder="0.0" />
+          </div>
+          <div>
+            <label class="small muted">Status</label>
             <select id="phaseStatus">
               <option value="not-started">Not Started</option>
               <option value="in-progress">In Progress</option>
               <option value="complete">Complete</option>
+              <option value="blocked">Blocked</option>
             </select>
+          </div>
+          <div class="full">
+            <label class="small muted">Color Label</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px" id="phaseColorPicker">
+              <div class="phase-color-opt" data-color="#d97706" style="background:#d97706" onclick="selectPhaseColor('#d97706',this)"></div>
+              <div class="phase-color-opt" data-color="#3b82f6" style="background:#3b82f6" onclick="selectPhaseColor('#3b82f6',this)"></div>
+              <div class="phase-color-opt" data-color="#10b981" style="background:#10b981" onclick="selectPhaseColor('#10b981',this)"></div>
+              <div class="phase-color-opt" data-color="#8b5cf6" style="background:#8b5cf6" onclick="selectPhaseColor('#8b5cf6',this)"></div>
+              <div class="phase-color-opt" data-color="#ef4444" style="background:#ef4444" onclick="selectPhaseColor('#ef4444',this)"></div>
+              <div class="phase-color-opt" data-color="#06b6d4" style="background:#06b6d4" onclick="selectPhaseColor('#06b6d4',this)"></div>
+              <div class="phase-color-opt" data-color="#f59e0b" style="background:#f59e0b" onclick="selectPhaseColor('#f59e0b',this)"></div>
+              <div class="phase-color-opt" data-color="#64748b" style="background:#64748b" onclick="selectPhaseColor('#64748b',this)"></div>
+            </div>
+            <input type="hidden" id="phaseColor" value="#d97706" />
+          </div>
+          <div class="full">
+            <label class="small muted">Notes</label>
+            <textarea id="phaseNotes" rows="2" placeholder="Scope notes, materials needed, special instructions..."></textarea>
           </div>
         </div>
       </div>
       <div class="modal-foot">
+        <button class="btn btn-danger" id="deletePhaseBtn" onclick="deleteCurrentPhase()" style="display:none">Delete</button>
         <button class="btn" onclick="kClose('addPhaseModal')">Cancel</button>
         <button class="btn-amber" onclick="savePhase()">Save Phase</button>
       </div>
@@ -2967,6 +3091,7 @@
         <button class="con-subtab" onclick="switchDetailTab('activity',this)">📡 Activity</button>
         <button class="con-subtab" onclick="switchDetailTab('documents',this)">📁 Files</button>
         <button class="con-subtab" onclick="switchDetailTab('financials',this)">💰 Financials</button>
+        <button class="con-subtab" onclick="switchDetailTab('retrospective',this)">📈 Retrospective</button>
       </div>
     </div>
 
@@ -3146,11 +3271,60 @@
 
       <!-- PHASES / SCHEDULE TAB -->
       <div id="detailPhases" style="display:none">
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div style="font-weight:700">Project Phases</div>
-          <button class="btn-amber" onclick="openAddPhaseModal()" style="padding:6px 14px;font-size:.82rem">+ Add Phase</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div style="display:flex;gap:0;background:rgba(8,18,36,.8);border:1px solid rgba(110,145,210,.15);border-radius:10px;overflow:hidden">
+            <button id="phaseViewKanban" onclick="switchPhaseView('kanban')"
+              style="padding:7px 16px;border:none;cursor:pointer;font-size:.8rem;font-weight:700;background:linear-gradient(135deg,var(--amber),var(--amber2));color:#fff">
+              📋 Kanban
+            </button>
+            <button id="phaseViewGantt" onclick="switchPhaseView('gantt')"
+              style="padding:7px 16px;border:none;cursor:pointer;font-size:.8rem;font-weight:600;background:transparent;color:var(--muted)">
+              📊 Gantt
+            </button>
+            <button id="phaseViewList" onclick="switchPhaseView('list')"
+              style="padding:7px 16px;border:none;cursor:pointer;font-size:.8rem;font-weight:600;background:transparent;color:var(--muted)">
+              📃 List
+            </button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div id="phaseHoursSummary" style="font-size:.8rem;color:var(--muted)"></div>
+            <button class="btn-amber" onclick="openAddPhaseModal()" style="padding:7px 16px;font-size:.82rem">+ Add Phase</button>
+          </div>
         </div>
-        <div id="phaseList"></div>
+
+        <!-- Kanban View -->
+        <div id="phaseKanbanView">
+          <div class="phase-kanban" id="phaseKanbanBoard">
+            <div class="phase-lane">
+              <div class="phase-lane-header" style="color:#94a3b8">⬜ NOT STARTED <span id="laneCount0" style="background:rgba(148,163,184,.15);padding:1px 7px;border-radius:999px;font-size:.7rem">0</span></div>
+              <div id="phaseLane0" class="phase-lane-drop" ondragover="event.preventDefault()" ondrop="phaseDropped(event,'not-started')"></div>
+            </div>
+            <div class="phase-lane">
+              <div class="phase-lane-header" style="color:#60a5fa">🔵 IN PROGRESS <span id="laneCount1" style="background:rgba(96,165,250,.15);padding:1px 7px;border-radius:999px;font-size:.7rem">0</span></div>
+              <div id="phaseLane1" class="phase-lane-drop" ondragover="event.preventDefault()" ondrop="phaseDropped(event,'in-progress')"></div>
+            </div>
+            <div class="phase-lane">
+              <div class="phase-lane-header" style="color:#34d399">✅ COMPLETE <span id="laneCount2" style="background:rgba(52,211,153,.15);padding:1px 7px;border-radius:999px;font-size:.7rem">0</span></div>
+              <div id="phaseLane2" class="phase-lane-drop" ondragover="event.preventDefault()" ondrop="phaseDropped(event,'complete')"></div>
+            </div>
+            <div class="phase-lane">
+              <div class="phase-lane-header" style="color:#f87171">🚫 BLOCKED <span id="laneCount3" style="background:rgba(248,113,113,.15);padding:1px 7px;border-radius:999px;font-size:.7rem">0</span></div>
+              <div id="phaseLane3" class="phase-lane-drop" ondragover="event.preventDefault()" ondrop="phaseDropped(event,'blocked')"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gantt View -->
+        <div id="phaseGanttView" style="display:none">
+          <div class="kt-card" style="padding:16px">
+            <div class="gantt-wrap" id="ganttWrap"></div>
+          </div>
+        </div>
+
+        <!-- List View -->
+        <div id="phaseListView" style="display:none">
+          <div id="phaseList"></div>
+        </div>
       </div>
 
       <!-- DAILY LOGS TAB -->
@@ -3188,9 +3362,49 @@
         </div>
       </div>
 
+      <!-- RETROSPECTIVE TAB -->
+      <div id="detailRetrospective" style="display:none">
+
+        <!-- Hours Burndown Chart -->
+        <div class="kt-card" style="padding:20px;margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+            <div>
+              <div style="font-weight:800;font-size:1rem">📉 Hours Burndown</div>
+              <div style="font-size:.78rem;color:var(--muted);margin-top:2px">Ideal vs actual progress over time</div>
+            </div>
+            <div id="burndownSummary" style="text-align:right;font-size:.82rem"></div>
+          </div>
+          <canvas id="burndownChart" height="200" style="width:100%;max-height:220px"></canvas>
+          <div id="burndownEmpty" style="display:none;text-align:center;padding:40px;color:var(--muted);font-size:.85rem">
+            Add phases with estimated hours and log time entries to see the burndown chart
+          </div>
+        </div>
+
+        <!-- Phase Hours Retrospective Table -->
+        <div class="kt-card" style="padding:20px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:1rem;margin-bottom:14px">⏱ Phase Hours Analysis</div>
+          <div id="retroPhaseTable"></div>
+        </div>
+
+        <!-- Variance Insights -->
+        <div class="kt-card" style="padding:20px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:1rem;margin-bottom:14px">💡 Estimation Insights</div>
+          <div id="retroInsights"></div>
+        </div>
+
+        <!-- Historical Average by Trade -->
+        <div class="kt-card" style="padding:20px">
+          <div style="font-weight:800;font-size:1rem;margin-bottom:4px">📊 Trade Accuracy (All Jobs)</div>
+          <div style="font-size:.78rem;color:var(--muted);margin-bottom:14px">How well you estimate hours by trade across all completed jobs</div>
+          <div id="retroTradeAccuracy"></div>
+        </div>
+
+      </div>
+
     </div><!-- end modal-body -->
   </div>
-</div>
+</div><!-- end jobDetailModal -->
+
 <script src="kytrac-app.js?v=202606261548"></script>
 </body>
 </html>
