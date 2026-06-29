@@ -321,7 +321,12 @@
       -webkit-overflow-scrolling: touch;
       touch-action: pan-x pan-y;
     }
-    .kt-board-wrap::-webkit-scrollbar { height: 7px; }
+    .fin-bar-cell { padding: 10px 16px; text-align: center; }
+    .fin-bar-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; color: rgba(148,163,184,.6); font-weight: 700; margin-bottom: 3px; }
+    .fin-bar-val { font-size: 1.05rem; font-weight: 900; }
+    .activity-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(110,145,210,.07); font-size: .82rem; }
+    .activity-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .8rem; flex-shrink: 0; background: rgba(110,145,210,.12); }
+    .activity-meta { font-size: .73rem; color: var(--muted); margin-top: 2px; }
     .kt-board-wrap::-webkit-scrollbar-track { background: rgba(255,255,255,.04); border-radius: 4px; }
     .kt-board-wrap::-webkit-scrollbar-thumb { background: var(--amber-border); border-radius: 4px; }
     .kt-board {
@@ -854,7 +859,7 @@
     <div class="kt-logo">
       <div class="kt-logo-mark">⚡ KYTRAC</div>
       <div class="kt-logo-tag" id="ktCompanyTag">7 Pillars Contracting</div>
-      <div class="kt-logo-version" id="ktVersionTag">Version 1.7.9 · 26/Jun/2026</div>
+      <div class="kt-logo-version" id="ktVersionTag">Version 1.8.0 · 29/Jun/2026</div>
     </div>
 
     <nav class="kt-nav">
@@ -2898,49 +2903,159 @@
 <!-- ══ JOB DETAIL MODAL ══ -->
 <div id="jobDetailModal" class="modal-overlay" style="padding:0;align-items:stretch;z-index:9000">
   <div class="modal-box" style="max-width:100%;width:100%;margin:0;border-radius:0;height:100vh;max-height:100vh;display:flex;flex-direction:column">
-    <div class="modal-head" style="flex-shrink:0">
-      <div>
-        <div id="detailJobNum" style="font-size:.8rem;color:var(--amber);font-weight:700"></div>
-        <h3 id="detailJobName" style="margin:4px 0 0"></h3>
-        <div id="detailJobClient" class="muted small"></div>
-        <div id="detailCallBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
+
+    <!-- Header -->
+    <div class="modal-head" style="flex-shrink:0;padding:14px 20px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div id="detailJobNum" style="font-size:.78rem;color:var(--amber);font-weight:800;background:rgba(217,119,6,.12);border:1px solid rgba(217,119,6,.3);border-radius:6px;padding:2px 8px"></div>
+          <div id="detailStatusBadge" style="font-size:.74rem;font-weight:700;padding:2px 10px;border-radius:999px;background:rgba(217,119,6,.15);color:var(--amber)"></div>
+        </div>
+        <h3 id="detailJobName" style="margin:5px 0 3px;font-size:1.15rem"></h3>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <div id="detailJobClient" class="muted small"></div>
+          <div id="detailCallBtns" style="display:flex;gap:5px;flex-wrap:wrap"></div>
+        </div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn" onclick="editCurrentJob()">✏️ Edit</button>
-        <button class="btn" onclick="shareCustomerPortal()" style="background:linear-gradient(135deg,#0d9488,#0891b2);color:#fff;border:none;font-size:.82rem">🔗 Share Portal</button>
-        <button class="btn btn-danger" onclick="deleteCurrentJob()" style="font-size:.82rem">🗑 Delete</button>
-        <button class="btn" onclick="kClose('jobDetailModal')">Close</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0">
+        <button class="btn" onclick="addJobActivity('note')" style="font-size:.78rem;padding:6px 12px">📝 Log Note</button>
+        <button class="btn" onclick="openJobPhotos()" style="font-size:.78rem;padding:6px 12px">📷 Photos</button>
+        <button class="btn" onclick="editCurrentJob()" style="font-size:.78rem;padding:6px 12px">✏️ Edit</button>
+        <button class="btn" onclick="shareCustomerPortal()" style="background:linear-gradient(135deg,#0d9488,#0891b2);color:#fff;border:none;font-size:.78rem;padding:6px 12px">🔗 Portal</button>
+        <button class="btn" onclick="kClose('jobDetailModal')" style="font-size:.78rem;padding:6px 12px">Close</button>
       </div>
     </div>
-    <div class="modal-body">
-      <div class="con-subtabs" style="margin-bottom:14px;flex-wrap:wrap">
-        <button class="con-subtab active" onclick="switchDetailTab('overview',this)">Overview</button>
-        <button class="con-subtab" onclick="switchDetailTab('financials',this)">Financials</button>
-        <button class="con-subtab" onclick="switchDetailTab('estimate',this)">📋 Estimate</button>
-        <button class="con-subtab" onclick="switchDetailTab('changeorders',this)">🔄 Change Orders</button>
-        <button class="con-subtab" onclick="switchDetailTab('subs',this)">👷 Subs</button>
-        <button class="con-subtab" onclick="switchDetailTab('phases',this)">Phases</button>
-        <button class="con-subtab" onclick="switchDetailTab('logs',this)">Daily Logs</button>
-        <button class="con-subtab" onclick="switchDetailTab('invoices',this)">🧾 Invoices</button>
-        <button class="con-subtab" onclick="switchDetailTab('documents',this)">📁 Files</button>
-        <button class="con-subtab" onclick="switchDetailTab('notes',this)">📝 Notes</button>
+
+    <!-- Financial Summary Bar -->
+    <div id="jobFinBar" style="flex-shrink:0;display:grid;grid-template-columns:repeat(6,1fr);gap:0;background:rgba(4,10,20,.9);border-top:1px solid rgba(110,145,210,.12);border-bottom:1px solid rgba(110,145,210,.12)">
+      <div class="fin-bar-cell" style="border-right:1px solid rgba(110,145,210,.1)">
+        <div class="fin-bar-label">Approved Price</div>
+        <div class="fin-bar-val" id="fbarApproved" style="color:#a3f2d2">—</div>
       </div>
-      <div id="detailOverview">
-        <div class="form-grid">
-          <div><div class="small muted">Status</div><div id="detailStatus" style="font-weight:700;color:var(--amber)"></div></div>
-          <div><div class="small muted">Type</div><div id="detailType"></div></div>
-          <div><div class="small muted">Status Date</div><div id="detailStart"></div></div>
-          <div><div class="small muted">Target End</div><div id="detailEnd"></div></div>
-          <div><div class="small muted">Superintendent</div><div id="detailSuper"></div></div>
-          <div><div class="small muted">Project Manager</div><div id="detailPM"></div></div>
-          <div class="full"><div class="small muted">Address</div><div id="detailAddress"></div></div>
-          <div class="full"><div class="small muted">Notes</div><div id="detailNotes" style="white-space:pre-wrap"></div></div>
-          <div class="full" id="detailCrewRow" style="display:none">
-            <div class="small muted">Assigned Crew</div>
-            <div id="detailCrew" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"></div>
+      <div class="fin-bar-cell" style="border-right:1px solid rgba(110,145,210,.1)">
+        <div class="fin-bar-label">Collected</div>
+        <div class="fin-bar-val" id="fbarCollected" style="color:#60a5fa">—</div>
+      </div>
+      <div class="fin-bar-cell" style="border-right:1px solid rgba(110,145,210,.1)">
+        <div class="fin-bar-label">Remaining Balance</div>
+        <div class="fin-bar-val" id="fbarBalance" style="color:var(--amber)">—</div>
+      </div>
+      <div class="fin-bar-cell" style="border-right:1px solid rgba(110,145,210,.1)">
+        <div class="fin-bar-label">Cost to Complete</div>
+        <div class="fin-bar-val" id="fbarCostComplete">—</div>
+      </div>
+      <div class="fin-bar-cell" style="border-right:1px solid rgba(110,145,210,.1)">
+        <div class="fin-bar-label">Projected Profit</div>
+        <div class="fin-bar-val" id="fbarProfit" style="color:#a3f2d2">—</div>
+      </div>
+      <div class="fin-bar-cell">
+        <div class="fin-bar-label">Projected Margin</div>
+        <div class="fin-bar-val" id="fbarMargin" style="color:#a3f2d2">—</div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div style="flex-shrink:0;padding:10px 20px 0;background:rgba(6,14,28,.95);border-bottom:1px solid rgba(110,145,210,.12)">
+      <div class="con-subtabs" style="margin-bottom:0;flex-wrap:wrap;gap:4px">
+        <button class="con-subtab active" onclick="switchDetailTab('dashboard',this)">🏠 Dashboard</button>
+        <button class="con-subtab" onclick="switchDetailTab('estimate',this)">📋 Estimate</button>
+        <button class="con-subtab" onclick="switchDetailTab('invoices',this)">🧾 Invoices</button>
+        <button class="con-subtab" onclick="switchDetailTab('changeorders',this)">🔄 Change Orders</button>
+        <button class="con-subtab" onclick="switchDetailTab('phases',this)">📅 Schedule</button>
+        <button class="con-subtab" onclick="switchDetailTab('logs',this)">📝 Daily Logs</button>
+        <button class="con-subtab" onclick="switchDetailTab('subs',this)">👷 Subs</button>
+        <button class="con-subtab" onclick="switchDetailTab('activity',this)">📡 Activity</button>
+        <button class="con-subtab" onclick="switchDetailTab('documents',this)">📁 Files</button>
+        <button class="con-subtab" onclick="switchDetailTab('financials',this)">💰 Financials</button>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div class="modal-body" style="flex:1;overflow-y:auto;padding:20px">
+
+      <!-- DASHBOARD TAB -->
+      <div id="detailDashboard">
+        <div style="display:grid;grid-template-columns:1fr 340px;gap:20px">
+
+          <!-- Left: Job info + activity -->
+          <div>
+            <!-- Job Details Card -->
+            <div class="kt-card" style="margin-bottom:16px;padding:18px">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 24px">
+                <div><div class="small muted">Status</div><div id="detailStatus" style="font-weight:700;color:var(--amber)"></div></div>
+                <div><div class="small muted">Job Type</div><div id="detailType"></div></div>
+                <div><div class="small muted">Sales Rep</div><div id="detailSuper"></div></div>
+                <div><div class="small muted">Project Manager</div><div id="detailPM"></div></div>
+                <div><div class="small muted">Start Date</div><div id="detailStart"></div></div>
+                <div><div class="small muted">Target End</div><div id="detailEnd"></div></div>
+                <div style="grid-column:1/-1"><div class="small muted">Address</div><div id="detailAddress" style="font-weight:600"></div></div>
+                <div style="grid-column:1/-1"><div class="small muted">Team Lead</div><div id="detailTeamLead"></div></div>
+                <div style="grid-column:1/-1"><div class="small muted">Access Info</div><div id="detailAccessInfo" style="color:var(--amber)"></div></div>
+                <div style="grid-column:1/-1" id="detailCrewRow" style="display:none">
+                  <div class="small muted">Assigned Crew</div>
+                  <div id="detailCrew" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"></div>
+                </div>
+              </div>
+              <div id="detailNotes" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line);white-space:pre-wrap;font-size:.85rem;color:#94a3b8;line-height:1.6"></div>
+            </div>
+
+            <!-- Activity Feed -->
+            <div class="kt-card" style="padding:18px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+                <div style="font-weight:800;font-size:.95rem">📡 Activity</div>
+                <button onclick="addJobActivity('note')" class="btn" style="font-size:.76rem;padding:4px 10px">+ Log Note</button>
+              </div>
+              <div id="detailActivityFeed" style="max-height:400px;overflow-y:auto">
+                <div class="small muted" style="text-align:center;padding:20px">Loading activity...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Map, Weather, Quick Stats -->
+          <div>
+            <!-- Map -->
+            <div class="kt-card" style="margin-bottom:16px;overflow:hidden;padding:0">
+              <div id="detailMap" style="width:100%;height:220px;background:rgba(8,18,36,.8);display:flex;align-items:center;justify-content:center">
+                <div class="small muted">Loading map...</div>
+              </div>
+              <div id="detailMapAddress" style="padding:10px 14px;font-size:.8rem;color:var(--muted);border-top:1px solid var(--line)"></div>
+            </div>
+
+            <!-- Weather -->
+            <div class="kt-card" style="margin-bottom:16px;padding:14px" id="detailWeatherCard">
+              <div style="font-weight:700;font-size:.82rem;margin-bottom:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Weather at Job Site</div>
+              <div id="detailWeather"><div class="small muted">Loading weather...</div></div>
+            </div>
+
+            <!-- Quick Financials -->
+            <div class="kt-card" style="padding:14px">
+              <div style="font-weight:700;font-size:.82rem;margin-bottom:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Financial Summary</div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Approved Price</span><span id="dashFinApproved" style="font-weight:700;color:#a3f2d2"></span></div>
+                <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Collected</span><span id="dashFinCollected" style="font-weight:700;color:#60a5fa"></span></div>
+                <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Balance Due</span><span id="dashFinBalance" style="font-weight:700;color:var(--amber)"></span></div>
+                <div style="height:1px;background:var(--line);margin:4px 0"></div>
+                <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Est. Cost</span><span id="dashFinCost"></span></div>
+                <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Proj. Profit</span><span id="dashFinProfit" style="font-weight:700;color:#a3f2d2"></span></div>
+                <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Margin</span><span id="dashFinMargin" style="font-weight:700;color:#a3f2d2"></span></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
+
+      <!-- ACTIVITY TAB -->
+      <div id="detailActivity" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <div style="font-weight:800;font-size:1rem">Activity Feed</div>
+          <button onclick="addJobActivity('note')" class="btn-amber" style="padding:8px 16px;font-size:.84rem">+ Log Note</button>
+        </div>
+        <div id="detailActivityFull">
+          <div class="small muted" style="text-align:center;padding:20px">Loading...</div>
+        </div>
+      </div>
+
+      <!-- FINANCIALS TAB -->
       <div id="detailFinancials" style="display:none">
         <div class="fin-row"><span class="fin-label">Contract Value</span><span class="fin-val" id="finContract" style="color:#a3f2d2"></span></div>
         <div class="fin-row"><span class="fin-label">Estimated Cost</span><span class="fin-val" id="finEstCost"></span></div>
@@ -2957,8 +3072,10 @@
           <div class="fin-row"><span class="fin-label">Variance (Est vs Actual)</span><span class="fin-val" id="finVariance"></span></div>
         </div>
       </div>
-         <div id="detailEstimate" style="display:none">
-          <!-- Summary bar -->
+
+      <!-- ESTIMATE TAB -->
+      <div id="detailEstimate" style="display:none">
+<!-- Summary bar -->
           <div class="est-summary-bar" id="estSummaryBar">
             <div class="est-kpi"><div class="est-kpi-val" id="estKpiCost">$0</div><div class="est-kpi-label">Est. Cost</div></div>
             <div class="est-kpi"><div class="est-kpi-val" id="estKpiPrice" style="color:var(--amber)">$0</div><div class="est-kpi-label">Est. Price</div></div>
@@ -2997,15 +3114,20 @@
             <button class="btn-amber" onclick="openAddGroupModal()">+ Add First Group</button>
           </div>
       </div>
-         <div id="detailChangeorders" style="display:none">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      </div>
+
+      <!-- CHANGE ORDERS TAB -->
+      <div id="detailChangeorders" style="display:none">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <div><div style="font-weight:700">Change Orders</div><div class="small muted" id="coSummaryLine" style="margin-top:2px"></div></div>
           <button class="btn-amber" onclick="openAddCOModal()" style="padding:6px 14px;font-size:.82rem">+ New CO</button>
         </div>
         <div id="coList"></div>
       </div>
+
+      <!-- SUBS TAB -->
       <div id="detailSubs" style="display:none">
-        <div style="margin-bottom:12px">
+<div style="margin-bottom:12px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div style="font-weight:700">Subs & Vendors</div>
             <button class="btn-amber" onclick="openAddSubModal()" style="padding:6px 14px;font-size:.82rem">+ Add Sub</button>
@@ -3021,54 +3143,28 @@
           <div id="jobBidList"></div>
         </div>
       </div>
+
+      <!-- PHASES / SCHEDULE TAB -->
       <div id="detailPhases" style="display:none">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <div style="font-weight:700">Project Phases</div>
           <button class="btn-amber" onclick="openAddPhaseModal()" style="padding:6px 14px;font-size:.82rem">+ Add Phase</button>
         </div>
         <div id="phaseList"></div>
       </div>
+
+      <!-- DAILY LOGS TAB -->
       <div id="detailLogs" style="display:none">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <div style="font-weight:700">Daily Logs</div>
           <button class="btn-amber" onclick="openAddLogModal()" style="padding:6px 14px;font-size:.82rem">+ Add Log</button>
         </div>
         <div id="logList"></div>
       </div>
 
-      <div id="detailNotes" style="display:none">
-        <div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-start">
-          <div>
-            <div style="font-weight:700;margin-bottom:4px">📝 Field Notes</div>
-            <div class="small muted">Job site observations, measurements, reminders. Auto-saves as you type.</div>
-          </div>
-          <div style="display:flex;gap:6px">
-            <button class="btn" onclick="copyFieldNotes()" style="font-size:.76rem;padding:4px 10px">📋 Copy</button>
-            <button class="btn" onclick="clearFieldNotes()" style="font-size:.76rem;padding:4px 10px">🗑 Clear</button>
-          </div>
-        </div>
-        <textarea id="fieldNotesArea" style="width:100%;height:calc(100vh - 280px);min-height:300px;background:rgba(8,18,36,.6);border:1px solid var(--amber-border);border-radius:10px;padding:14px;color:#eaf0fb;font-size:.9rem;line-height:1.7;resize:none;font-family:inherit;box-sizing:border-box" placeholder="Start typing your field notes here...&#10;&#10;• Master bath: tile needs to match existing — bring sample&#10;• Deck boards: 2x6 treated, 16ft lengths&#10;• Customer wants work done before July 4th&#10;• Check permit requirements for deck expansion" oninput="autoSaveFieldNotes()"></textarea>
-        <div style="margin-top:6px">
-          <div class="small muted" id="fieldNotesSaveStatus" style="font-size:.76rem">Auto-saves as you type</div>
-        </div>
-      </div>
-
-      <div id="detailDocuments" style="display:none">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-          <div>
-            <div style="font-weight:700">Files & Documents</div>
-            <div class="small muted" id="jobDocCount" style="margin-top:2px"></div>
-          </div>
-          <label class="btn-amber" style="cursor:pointer;padding:6px 14px;font-size:.82rem;display:inline-flex;align-items:center;gap:6px">
-            📎 Upload File
-            <input type="file" multiple accept="*/*" style="display:none" onchange="handleDocUpload(this,'job')" />
-          </label>
-        </div>
-        <div id="jobDocList"></div>
-      </div>
-
+      <!-- INVOICES TAB -->
       <div id="detailInvoices" style="display:none">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <div>
             <div style="font-weight:700">Invoices</div>
             <div class="small muted" id="invJobSummaryLine" style="margin-top:2px"></div>
@@ -3077,10 +3173,24 @@
         </div>
         <div id="jobInvoiceList"></div>
       </div>
-    </div>
+
+      <!-- FILES TAB -->
+      <div id="detailDocuments" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <div style="font-weight:800">Photos & Files</div>
+          <label style="cursor:pointer;background:#d97706;color:#fff;padding:8px 16px;border-radius:10px;font-size:.84rem;font-weight:700">
+            📷 Upload Photos
+            <input type="file" multiple accept="image/*,.pdf,.doc,.docx" style="display:none" onchange="uploadJobFiles(this)">
+          </label>
+        </div>
+        <div id="detailFilesList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px">
+          <div class="small muted" style="text-align:center;padding:20px;grid-column:1/-1">No files yet</div>
+        </div>
+      </div>
+
+    </div><!-- end modal-body -->
   </div>
 </div>
-
 <script src="kytrac-app.js?v=202606261548"></script>
 </body>
 </html>

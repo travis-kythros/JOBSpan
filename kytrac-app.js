@@ -653,10 +653,15 @@ function openJobDetail(jobId) {
   if (!job) return;
   conCurrentJobId = jobId;
 
-  document.getElementById('detailJobNum').textContent = job.jobNumber || '';
+  const fmt = v => '$' + Number(v||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
+
+  // Header
+  document.getElementById('detailJobNum').textContent = '#' + (job.jobNumber || '');
   document.getElementById('detailJobName').textContent = job.name;
   document.getElementById('detailJobClient').textContent = '👤 ' + job.client + (job.phone ? ' · ' + job.phone : '') + (job.email ? ' · ' + job.email : '');
-  // Quick action buttons
+  document.getElementById('detailStatusBadge').textContent = job.status || '';
+
+  // Call/Text/Email buttons
   const callBtns = document.getElementById('detailCallBtns');
   if (callBtns) {
     const btns = [];
@@ -669,14 +674,33 @@ function openJobDetail(jobId) {
     }
     callBtns.innerHTML = btns.join('');
   }
-  document.getElementById('detailStatus').textContent = job.status;
+
+  // Dashboard fields
+  document.getElementById('detailStatus').textContent = job.status || '—';
   document.getElementById('detailType').textContent = job.type || '—';
   document.getElementById('detailStart').textContent = job.startDate || '—';
   document.getElementById('detailEnd').textContent = job.endDate || '—';
   document.getElementById('detailSuper').textContent = job.superintendent || '—';
   document.getElementById('detailPM').textContent = job.pm || '—';
   document.getElementById('detailAddress').textContent = job.address || '—';
-  document.getElementById('detailNotes').textContent = job.notes || '—';
+  document.getElementById('detailTeamLead').textContent = job.teamLead || '—';
+  document.getElementById('detailAccessInfo').textContent = job.accessInfo || job.notes?.match(/Access: (.+)/)?.[1] || '—';
+  document.getElementById('detailNotes').textContent = job.notes || '';
+
+  // Map
+  const mapAddress = job.address || '';
+  const mapEl = document.getElementById('detailMap');
+  const mapAddrEl = document.getElementById('detailMapAddress');
+  if (mapAddrEl) mapAddrEl.textContent = mapAddress;
+  if (mapEl && mapAddress) {
+    const encodedAddr = encodeURIComponent(mapAddress);
+    mapEl.innerHTML = `<iframe
+      width="100%" height="220" frameborder="0" style="border:0"
+      src="https://www.google.com/maps/embed/v1/place?key=AIzaSyBWMNwGatEdsBsKdjZR01qyyPLBV516AF4&q=${encodedAddr}&zoom=14"
+      allowfullscreen loading="lazy"></iframe>`;
+  } else if (mapEl) {
+    mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:.84rem">No address on file</div>';
+  }
 
   // Financials
   const cv = job.contractValue || 0;
@@ -684,22 +708,56 @@ function openJobDetail(jobId) {
   const ac = job.actualCost || 0;
   const profit = cv - ec;
   const margin = cv ? (profit / cv * 100) : 0;
-  document.getElementById('finContract').textContent = '$' + cv.toLocaleString();
-  document.getElementById('finEstCost').textContent = '$' + ec.toLocaleString();
-  document.getElementById('finEstProfit').textContent = '$' + profit.toLocaleString();
+
+  // Calculate collected from invoices
+  const jobInvs = (window._allInvoices || []).filter(i => i.jobId === jobId);
+  const collected = jobInvs.reduce((s,i) => s + (i.amtPaid||0), 0);
+  const balance = cv - collected;
+  const costToComplete = Math.max(0, ec - ac);
+  const projProfit = cv - ec;
+  const projMargin = cv > 0 ? (projProfit / cv * 100) : 0;
+
+  // Financial bar
+  const setFin = (id, val, fmtFn) => { const el = document.getElementById(id); if (el) el.textContent = fmtFn(val); };
+  setFin('fbarApproved', cv, fmt);
+  setFin('fbarCollected', collected, fmt);
+  setFin('fbarBalance', balance, fmt);
+  setFin('fbarCostComplete', costToComplete, fmt);
+  setFin('fbarProfit', projProfit, fmt);
+  document.getElementById('fbarMargin').textContent = projMargin.toFixed(1) + '%';
+  document.getElementById('fbarMargin').style.color = projMargin > 0 ? '#a3f2d2' : '#f87171';
+
+  // Dashboard right panel financials
+  setFin('dashFinApproved', cv, fmt);
+  setFin('dashFinCollected', collected, fmt);
+  setFin('dashFinBalance', balance, fmt);
+  setFin('dashFinCost', ec, fmt);
+  setFin('dashFinProfit', projProfit, fmt);
+  document.getElementById('dashFinMargin').textContent = projMargin.toFixed(1) + '%';
+
+  // Financials tab
+  setFin('finContract', cv, fmt);
+  setFin('finEstCost', ec, fmt);
+  setFin('finEstProfit', profit, fmt);
   document.getElementById('finEstMargin').textContent = margin.toFixed(1) + '%';
   document.getElementById('finMarginBar').style.width = Math.min(margin, 100) + '%';
-  document.getElementById('finActualCost').textContent = '$' + ac.toLocaleString();
+  setFin('finActualCost', ac, fmt);
   const variance = ec - ac;
   const varEl = document.getElementById('finVariance');
-  varEl.textContent = (variance >= 0 ? '+' : '') + '$' + variance.toLocaleString();
-  varEl.style.color = variance >= 0 ? '#a3f2d2' : '#ef5350';
-  document.getElementById('actualCostInput').value = ac || '';
+  if (varEl) { varEl.textContent = (variance >= 0 ? '+' : '') + fmt(variance); varEl.style.color = variance >= 0 ? '#a3f2d2' : '#ef5350'; }
+  const aciEl = document.getElementById('actualCostInput');
+  if (aciEl) aciEl.value = ac || '';
 
-  // Switch to overview tab
-  switchDetailTab('overview', document.querySelector('#jobDetailModal .con-subtab'));
+  // Weather
+  if (job.address) loadJobWeather(job.address);
+
+  // Load phases, logs, activity
   conLoadPhases(jobId);
   conLoadLogs(jobId);
+  loadJobActivity(jobId);
+
+  // Switch to dashboard tab
+  switchDetailTab('dashboard', document.querySelector('#jobDetailModal .con-subtab'));
   kOpen('jobDetailModal');
 }
 
@@ -1298,7 +1356,7 @@ window.renderJCDTable = renderJCDTable;
 // conLoadJobs CO patch removed — consolidated into main function above
 
 function switchDetailTab(tab, btn) {
-  const allTabs = ['overview','financials','estimate','changeorders','subs','phases','logs','invoices','documents','notes'];
+  const allTabs = ['dashboard','financials','estimate','changeorders','subs','phases','logs','invoices','documents','activity'];
   allTabs.forEach(t => {
     const key = 'detail' + t.charAt(0).toUpperCase() + t.slice(1);
     const el = document.getElementById(key);
@@ -1309,20 +1367,16 @@ function switchDetailTab(tab, btn) {
     btn.classList.add('active');
   } else {
     const btns = document.querySelectorAll('#jobDetailModal .con-subtab');
-    const idx = allTabs.indexOf(tab);
-    if (btns[idx]) btns[idx].classList.add('active');
+    if (btns[0]) btns[0].classList.add('active');
   }
   if (tab === 'estimate') loadEstimate(conCurrentJobId);
   if (tab === 'changeorders') renderCOList();
-  if (tab === 'subs') loadJobBidRequests(conCurrentJobId);
-  if (tab === 'documents') loadJobDocs(conCurrentJobId);
-  if (tab === 'notes') loadFieldNotes(conCurrentJobId);
-  if (tab === 'subs') renderSubList();
+  if (tab === 'subs') { loadJobBidRequests(conCurrentJobId); renderSubList(); }
+  if (tab === 'documents') { loadJobDocs(conCurrentJobId); loadJobPhotos(conCurrentJobId); }
   if (tab === 'phases') renderPhaseList();
   if (tab === 'logs') renderLogList();
   if (tab === 'invoices') loadJobInvoices(conCurrentJobId);
-  if (tab === 'documents') loadJobDocs(conCurrentJobId);
-  if (tab === 'notes') loadFieldNotes(conCurrentJobId);
+  if (tab === 'activity') loadJobActivity(conCurrentJobId, 'full');
 }
 
 
@@ -9170,6 +9224,227 @@ window.saveJob = function() {
       .catch(e => alert('Error saving: ' + e.message));
   }
 };
+
+// ════════════════════════════════════════════════════
+// ── JOB WEATHER ──
+// ════════════════════════════════════════════════════
+async function loadJobWeather(address) {
+  const el = document.getElementById('detailWeather');
+  if (!el) return;
+  el.innerHTML = '<div class="small muted">Loading weather...</div>';
+
+  try {
+    // Geocode address using Google Maps Geocoding API
+    const geoRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=AIzaSyBWMNwGatEdsBsKdjZR01qyyPLBV516AF4`);
+    const geoData = await geoRes.json();
+    if (!geoData.results?.length) { el.innerHTML = '<div class="small muted">Weather unavailable</div>'; return; }
+    const { lat, lng } = geoData.results[0].geometry.location;
+
+    // Open-Meteo free weather API
+    const wxRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,weathercode,windspeed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=7`);
+    const wx = await wxRes.json();
+    const cur = wx.current;
+    const daily = wx.daily;
+
+    const wmoIcon = code => {
+      if (code === 0) return '☀️';
+      if (code <= 3) return '⛅';
+      if (code <= 49) return '🌫️';
+      if (code <= 67) return '🌧️';
+      if (code <= 77) return '❄️';
+      if (code <= 82) return '🌦️';
+      return '⛈️';
+    };
+    const wmoLabel = code => {
+      if (code === 0) return 'Clear';
+      if (code <= 3) return 'Partly Cloudy';
+      if (code <= 49) return 'Foggy';
+      if (code <= 67) return 'Rain';
+      if (code <= 77) return 'Snow';
+      if (code <= 82) return 'Showers';
+      return 'Thunderstorms';
+    };
+
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const dailyHtml = (daily.time || []).slice(0,7).map((date, i) => {
+      const d = new Date(date + 'T12:00:00');
+      return `<div style="text-align:center;font-size:.75rem">
+        <div style="color:var(--muted)">${days[d.getDay()]}</div>
+        <div style="font-size:1rem">${wmoIcon(daily.weathercode[i])}</div>
+        <div style="font-weight:700;color:#eaf0fb">${Math.round(daily.temperature_2m_max[i])}°</div>
+        <div style="color:var(--muted)">${Math.round(daily.temperature_2m_min[i])}°</div>
+      </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <div style="font-size:2.5rem">${wmoIcon(cur.weathercode)}</div>
+        <div>
+          <div style="font-size:1.6rem;font-weight:900;color:#eaf0fb">${Math.round(cur.temperature_2m)}°F</div>
+          <div style="font-size:.8rem;color:var(--muted)">${wmoLabel(cur.weathercode)} · Wind ${Math.round(cur.windspeed_10m)} mph</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">${dailyHtml}</div>`;
+  } catch(e) {
+    el.innerHTML = '<div class="small muted">Weather unavailable</div>';
+  }
+}
+
+// ════════════════════════════════════════════════════
+// ── JOB ACTIVITY FEED ──
+// ════════════════════════════════════════════════════
+let _jobActivityListener = null;
+
+function loadJobActivity(jobId, mode) {
+  if (!jobId || !conDb) return;
+  const feedEl = document.getElementById(mode === 'full' ? 'detailActivityFull' : 'detailActivityFeed');
+  if (!feedEl) return;
+  feedEl.innerHTML = '<div class="small muted" style="text-align:center;padding:16px">Loading...</div>';
+
+  // Load logs and notes as activity
+  const activityItems = [];
+
+  // Get daily logs
+  coll('jobs').doc(jobId).collection('logs').orderBy('date','desc').limit(50).get()
+    .then(snap => {
+      snap.forEach(d => {
+        const log = d.data();
+        activityItems.push({
+          type: 'log',
+          icon: '📝',
+          iconBg: 'rgba(59,130,246,.15)',
+          text: log.notes || 'Daily log entry',
+          sub: (log.date || '') + (log.userName ? ' · ' + log.userName : ''),
+          time: log.date || '',
+          ts: log.date || '0',
+        });
+      });
+
+      // Get invoices
+      return coll('jobs').doc(jobId).collection('invoices').orderBy('date','desc').limit(20).get();
+    })
+    .then(snap => {
+      snap.forEach(d => {
+        const inv = d.data();
+        activityItems.push({
+          type: 'invoice',
+          icon: '🧾',
+          iconBg: 'rgba(217,119,6,.15)',
+          text: (inv.number || 'Invoice') + ' — ' + (inv.type || '') + ' — $' + (inv.total||0).toLocaleString(),
+          sub: inv.date + ' · ' + (inv.status || 'Draft'),
+          time: inv.date || '',
+          ts: inv.date || '0',
+        });
+      });
+
+      // Get phases
+      return coll('jobs').doc(jobId).collection('phases').orderBy('startDate').get();
+    })
+    .then(snap => {
+      snap.forEach(d => {
+        const p = d.data();
+        activityItems.push({
+          type: 'phase',
+          icon: '📅',
+          iconBg: 'rgba(139,92,246,.15)',
+          text: p.name + ' · ' + (p.status || 'Not Started'),
+          sub: (p.startDate || '') + (p.endDate ? ' → ' + p.endDate : ''),
+          time: p.startDate || '',
+          ts: p.startDate || '0',
+        });
+      });
+
+      // Sort by time descending
+      activityItems.sort((a,b) => b.ts.localeCompare(a.ts));
+
+      if (!activityItems.length) {
+        feedEl.innerHTML = '<div class="small muted" style="text-align:center;padding:20px">No activity yet</div>';
+        return;
+      }
+
+      feedEl.innerHTML = activityItems.map(item => `
+        <div class="activity-item">
+          <div class="activity-icon" style="background:${item.iconBg}">${item.icon}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.83rem;color:#eaf0fb;line-height:1.4">${esc(item.text)}</div>
+            <div class="activity-meta">${esc(item.sub)}</div>
+          </div>
+        </div>`).join('');
+    })
+    .catch(() => {
+      feedEl.innerHTML = '<div class="small muted" style="text-align:center;padding:16px">Could not load activity</div>';
+    });
+}
+
+function addJobActivity(type) {
+  if (!conCurrentJobId) return;
+  const note = prompt('Add a note to this job:');
+  if (!note?.trim()) return;
+  coll('jobs').doc(conCurrentJobId).collection('logs').add({
+    date: new Date().toISOString().split('T')[0],
+    notes: note.trim(),
+    userName: conCurrentUser?.displayName || conCurrentUser?.email || 'Unknown',
+    type: 'note',
+    companyId: currentCompanyId,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }).then(() => {
+    loadJobActivity(conCurrentJobId);
+    renderLogList();
+  });
+}
+window.addJobActivity = addJobActivity;
+
+// ════════════════════════════════════════════════════
+// ── JOB PHOTO UPLOADS ──
+// ════════════════════════════════════════════════════
+function openJobPhotos() {
+  switchDetailTab('documents', null);
+  // Find and click correct tab button
+  document.querySelectorAll('#jobDetailModal .con-subtab').forEach(btn => {
+    if (btn.textContent.includes('Files')) btn.click();
+  });
+}
+
+function loadJobPhotos(jobId) {
+  // Photos are stored as base64 in Firestore documents subcollection
+  // or we display uploaded docs with image preview
+  loadJobDocs(jobId); // reuse existing doc loader
+}
+
+function uploadJobFiles(input) {
+  if (!conCurrentJobId || !input.files?.length) return;
+  const files = Array.from(input.files);
+  const listEl = document.getElementById('detailFilesList');
+  if (listEl) listEl.innerHTML = '<div class="small muted" style="text-align:center;padding:20px;grid-column:1/-1">Uploading ' + files.length + ' file(s)...</div>';
+
+  // Convert to base64 and store in Firestore
+  Promise.all(files.map(file => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => resolve({ name: file.name, type: file.type, size: file.size, data: e.target.result });
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  }))).then(async results => {
+    for (const f of results) {
+      // Only store files under 900KB (Firestore 1MB doc limit)
+      if (f.size > 900000) {
+        alert(f.name + ' is too large (max 900KB). Skipping.');
+        continue;
+      }
+      await coll('jobs').doc(conCurrentJobId).collection('documents').add({
+        name: f.name,
+        type: f.type,
+        size: f.size,
+        data: f.data,
+        uploadedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        uploadedBy: conCurrentUser?.email || '',
+        companyId: currentCompanyId,
+      });
+    }
+    loadJobDocs(conCurrentJobId);
+  }).catch(e => alert('Upload error: ' + e.message));
+}
+window.uploadJobFiles = uploadJobFiles;
+window.openJobPhotos = openJobPhotos;
 
 // Boot
 conLoadFirebase();
