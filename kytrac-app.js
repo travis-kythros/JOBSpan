@@ -1,4 +1,4 @@
-// KYTRAC Application JavaScript v1.9.2 · 05/Jul/2026
+// KYTRAC Application JavaScript v1.9.6 · 05/Jul/2026
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -9,7 +9,7 @@ const todayISO = () => new Date().toISOString().slice(0,10);
 const addDays = (iso,n) => { const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
 
 function kOpen(id){ const el=document.getElementById(id); if(el){ el.style.display='flex'; el.classList.add('open'); } }
-function kClose(id){ const el=document.getElementById(id); if(el){ el.style.display='none'; el.classList.remove('open'); } }
+function kClose(id){ const el=document.getElementById(id); if(el){ el.style.display='none'; el.classList.remove('open'); } if(id==='jobDetailModal' && typeof _msgUnsub==='function'){ try{_msgUnsub();}catch(e){} _msgUnsub=null; } }
 window.kOpen = kOpen;
 window.kClose = kClose;
 
@@ -700,6 +700,786 @@ function conRenderSchedule() {
   `).join('');
 }
 
+// ════════════════════════════════════════════════════
+// ── JOBTREAD CSV IMPORT (financials by job number) ──
+// Privacy: customer-name columns are never read or stored.
+// Join key: job number parsed from invoice document strings.
+// ════════════════════════════════════════════════════
+
+// RFC-4180-ish CSV parser: handles quotes, escaped quotes, embedded newlines/commas.
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = '', i = 0, inQuotes = false;
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  while (i < text.length) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i+1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === ',') { row.push(field); field = ''; i++; continue; }
+    if (c === '\r') { i++; continue; }
+    if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; i++; continue; }
+    field += c; i++;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function csvToObjects(text) {
+  const rows = parseCSV(text);
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1).filter(r => r.some(c => c && c.trim())).map(r => {
+    const o = {};
+    headers.forEach((h, idx) => { o[h] = (r[idx] || '').trim(); });
+    return o;
+  });
+}
+
+// "Customer Invoice 1065-124" -> "1065", "Invoice 1-11" -> "1"
+function jobNumFromInvoice(s) {
+  if (!s) return null;
+  const m = String(s).match(/(\d+)\s*-\s*\d+/);
+  return m ? m[1] : null;
+}
+
+function num(v) { return parseFloat(String(v||'').replace(/[$,]/g,'')) || 0; }
+
+function detectImportType(headers) {
+  const h = headers.map(x => x.toLowerCase());
+  const has = (...cols) => cols.every(c => h.includes(c));
+  if (has('document name') && h.includes('amount') && h.includes('source')) return 'payments';
+  if (has('document','total') && h.includes('subtotal')) return 'invoices';
+  if (has('document','ext price') && h.includes('job')) return 'costitems';
+  return null;
+}
+
+let _pendingImport = null;
+
+async function handleImportFiles(fileList) {
+  const files = Array.from(fileList || []);
+  const out = document.getElementById('importResult');
+  if (!files.length || !out) return;
+  out.innerHTML = '<div class="small muted">Reading ' + files.length + ' file(s)…</div>';
+
+  const collected = {};   // jobNum -> total paid
+  const invoicedByFile = { invoices:{}, costitems:{} }; // keep sources separate to avoid double count
+  const seen = [];
+  const unknownFiles = [];
+
+  for (const file of files) {
+    let text;
+    try { text = await file.text(); } catch(e) { unknownFiles.push(file.name + ' (unreadable)'); continue; }
+    const objs = csvToObjects(text);
+    if (!objs.length) { unknownFiles.push(file.name + ' (empty)'); continue; }
+    const type = detectImportType(Object.keys(objs[0]));
+    if (!type) { unknownFiles.push(file.name + ' (unrecognized headers)'); continue; }
+
+    // Only count invoices that were actually issued — exclude Draft (never sent) and Void (cancelled).
+    const countsAsInvoiced = st => { const s = (st||'').toLowerCase(); return s !== 'draft' && s !== 'void' && s !== 'canceled' && s !== 'cancelled'; };
+    if (type === 'payments') {
+      objs.forEach(o => { const jn = jobNumFromInvoice(o['Document Name']); if (jn) collected[jn] = (collected[jn]||0) + num(o['Amount']); });
+    } else if (type === 'invoices') {
+      objs.forEach(o => { if (!countsAsInvoiced(o['Status'])) return; const jn = jobNumFromInvoice(o['Document']); if (jn) invoicedByFile.invoices[jn] = (invoicedByFile.invoices[jn]||0) + num(o['Total']); });
+    } else if (type === 'costitems') {
+      objs.forEach(o => { if (!countsAsInvoiced(o['Status'])) return; const jn = jobNumFromInvoice(o['Document']); if (jn) invoicedByFile.costitems[jn] = (invoicedByFile.costitems[jn]||0) + num(o['Ext Price']); });
+    }
+    seen.push({ name: file.name, type, rows: objs.length });
+  }
+
+  // Invoiced: prefer the invoices export; fall back to cost-items only for jobs not covered by invoices
+  const invoiced = { ...invoicedByFile.costitems, ...invoicedByFile.invoices };
+
+  const allJobNums = new Set([...Object.keys(collected), ...Object.keys(invoiced)]);
+  const updates = [];
+  const unmatched = [];
+  allJobNums.forEach(jn => {
+    const job = conJobs.find(j => String(j.jobNumber) === String(jn));
+    if (!job) { unmatched.push(jn); return; }
+    const u = { job, jobNum: jn };
+    if (collected[jn] !== undefined) u.collected = Math.round(collected[jn]*100)/100;
+    if (invoiced[jn] !== undefined) u.invoiced = Math.round(invoiced[jn]*100)/100;
+    updates.push(u);
+  });
+  updates.sort((a,b) => Number(a.jobNum) - Number(b.jobNum));
+
+  _pendingImport = updates;
+  let html = '<div style="border:1px solid var(--line);border-radius:10px;padding:14px">';
+  html += '<div style="font-weight:800;margin-bottom:8px">Import preview</div>';
+  seen.forEach(s => { html += '<div class="small" style="color:#a3f2d2">✓ ' + esc(s.name) + ' — ' + s.type + ' (' + s.rows + ' rows)</div>'; });
+  unknownFiles.forEach(u => { html += '<div class="small" style="color:#fca5a5">✗ ' + esc(u) + '</div>'; });
+  html += '<div style="height:1px;background:var(--line);margin:10px 0"></div>';
+  html += '<div class="small muted" style="margin-bottom:8px">' + updates.length + ' job(s) matched'
+        + (unmatched.length ? ' · ' + unmatched.length + ' unmatched job #: ' + unmatched.slice(0,12).join(', ') + (unmatched.length>12?'…':'') : '') + '</div>';
+
+  if (updates.length) {
+    html += '<div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px">';
+    html += '<div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;padding:7px 10px;font-size:.72rem;font-weight:700;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line)"><span>Job #</span><span style="text-align:right">Collected</span><span style="text-align:right">Invoiced</span></div>';
+    updates.slice(0,300).forEach(u => {
+      html += '<div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;padding:6px 10px;font-size:.82rem;border-bottom:1px solid rgba(110,145,210,.06)">'
+            + '<span style="color:var(--amber);font-weight:700">' + esc(u.jobNum) + '</span>'
+            + '<span style="text-align:right">' + (u.collected!==undefined?'$'+u.collected.toLocaleString():'—') + '</span>'
+            + '<span style="text-align:right">' + (u.invoiced!==undefined?'$'+u.invoiced.toLocaleString():'—') + '</span></div>';
+    });
+    html += '</div>';
+    html += '<div style="margin-top:12px"><button class="btn-amber" onclick="commitImport()" style="padding:9px 18px;font-weight:700">✓ Apply to ' + updates.length + ' job(s)</button>'
+          + '<button class="btn" onclick="document.getElementById(\'importResult\').innerHTML=\'\';_pendingImport=null" style="margin-left:8px;padding:9px 18px">Cancel</button></div>';
+  } else {
+    html += '<div class="small" style="color:#fca5a5">No matching jobs. Confirm job numbers in KYTRAC match JobTread\'s.</div>';
+  }
+  html += '</div>';
+  out.innerHTML = html;
+}
+
+async function commitImport() {
+  if (!_pendingImport || !_pendingImport.length || !conDb) return;
+  const out = document.getElementById('importResult');
+  const total = _pendingImport.length;
+  let done = 0, failed = 0;
+  if (out) out.innerHTML = '<div class="small muted">Applying… 0/' + total + '</div>';
+
+  for (const u of _pendingImport) {
+    const patch = { financialsSyncedAt: firebase.firestore.FieldValue.serverTimestamp() };
+    if (u.collected !== undefined) patch.collected = u.collected;
+    if (u.invoiced !== undefined) patch.invoiced = u.invoiced;
+    try {
+      await coll('jobs').doc(u.job.id).update(patch);
+      const j = conJobs.find(x => x.id === u.job.id);
+      if (j) { if (u.collected!==undefined) j.collected = u.collected; if (u.invoiced!==undefined) j.invoiced = u.invoiced; }
+      done++;
+    } catch(e) { failed++; }
+    if (out && done % 5 === 0) out.innerHTML = '<div class="small muted">Applying… ' + done + '/' + total + '</div>';
+  }
+  if (out) out.innerHTML = '<div style="border:1px solid rgba(29,187,135,.3);background:rgba(29,187,135,.08);border-radius:10px;padding:14px"><div style="font-weight:800;color:#a3f2d2">✓ Import complete</div><div class="small muted" style="margin-top:4px">' + done + ' job(s) updated' + (failed?', '+failed+' failed':'') + '. Reopen any job to see refreshed financials.</div></div>';
+  _pendingImport = null;
+  if (conCurrentJobId) { const j = conJobs.find(x=>x.id===conCurrentJobId); if (j) refreshJobFinancials(j); }
+}
+
+// ════════════════════════════════════════════════════
+// ── TEAM CACHE + shared option helpers ──
+// ════════════════════════════════════════════════════
+let allTeamMembers = [];
+function loadTeamCache() {
+  if (!conDb) return;
+  coll('settings').doc('team').get()
+    .then(doc => {
+      const members = doc.exists ? (doc.data().members || {}) : {};
+      allTeamMembers = Object.values(members);
+    })
+    .catch(() => { allTeamMembers = []; });
+}
+// <option> HTML for team members (value = name). Optional selected + placeholder.
+function getTeamMemberOpts(selected, placeholder) {
+  let html = '<option value="">' + (placeholder || '— Select —') + '</option>';
+  allTeamMembers.forEach(m => {
+    const name = m.name || m.displayName || m.email || '';
+    if (!name) return;
+    html += '<option value="' + esc(name) + '"' + (name === selected ? ' selected' : '') + '>' + esc(name) + (m.role ? ' · ' + esc(m.role) : '') + '</option>';
+  });
+  return html;
+}
+// value = email variant
+function getTeamMemberOptsEmail(selected, placeholder) {
+  let html = '<option value="">' + (placeholder || '— Unassigned —') + '</option>';
+  allTeamMembers.forEach(m => {
+    const email = m.email || '';
+    const name = m.name || m.displayName || email;
+    if (!email) return;
+    html += '<option value="' + esc(email) + '"' + (email === selected ? ' selected' : '') + '>' + esc(name) + '</option>';
+  });
+  return html;
+}
+
+// ════════════════════════════════════════════════════
+// ── PER-JOB TO-DOS ──
+// ════════════════════════════════════════════════════
+function renderJobTodos(jobId) {
+  // Populate assignee dropdown
+  const asgn = document.getElementById('jobTodoAssignee');
+  if (asgn) asgn.innerHTML = getTeamMemberOptsEmail('', 'Assign to…');
+
+  const list = document.getElementById('jobTodoList');
+  const stats = document.getElementById('jobTodoStats');
+  if (!list) return;
+  const today = new Date().toISOString().split('T')[0];
+  const todos = (allTodos || []).filter(t => t.jobId === jobId);
+  const open = todos.filter(t => !t.done).length;
+  const done = todos.filter(t => t.done).length;
+  const overdue = todos.filter(t => !t.done && t.dueDate && t.dueDate < today).length;
+  if (stats) stats.innerHTML = `<span>${open} open</span><span>${done} completed</span>` + (overdue ? `<span style="color:#fca5a5">${overdue} overdue</span>` : '');
+
+  if (!todos.length) {
+    list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-style:italic">No to-dos for this job yet. Add one above.</div>';
+    return;
+  }
+  todos.sort((a,b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    const pa = a.priority==='high'?0:a.priority==='med'?1:2, pb = b.priority==='high'?0:b.priority==='med'?1:2;
+    if (pa !== pb) return pa - pb;
+    if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+    return a.dueDate ? -1 : b.dueDate ? 1 : 0;
+  });
+  const pColors = { high:'#ef5350', med:'#f97316', normal:'var(--amber-border)' };
+  list.innerHTML = todos.map(todo => {
+    const pColor = pColors[todo.priority] || 'var(--amber-border)';
+    const isOverdue = !todo.done && todo.dueDate && todo.dueDate < today;
+    return `<div class="todo-item ${todo.done?'done':''}" style="display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px">
+      <div onclick="toggleTodo('${todo.id}',${!todo.done})" style="width:22px;height:22px;border-radius:6px;border:2px solid ${pColor};${todo.done?'background:'+pColor:''};cursor:pointer;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;color:#04121f;font-weight:900">${todo.done?'✓':''}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.9rem;font-weight:${todo.done?'400':'600'};color:${todo.done?'var(--muted)':'#eaf0fb'};${todo.done?'text-decoration:line-through':''}">${esc(todo.text||'')}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:5px">
+          ${todo.priority==='high'?'<span style="font-size:.68rem;background:#ef535022;color:#fca5a5;border-radius:999px;padding:1px 7px;font-weight:700">HIGH</span>':''}
+          ${todo.priority==='med'?'<span style="font-size:.68rem;background:#f9731622;color:#fed7aa;border-radius:999px;padding:1px 7px;font-weight:700">MED</span>':''}
+          ${todo.assignee?`<span style="font-size:.72rem;color:var(--muted)">👤 ${esc(todo.assigneeName||todo.assignee)}</span>`:''}
+          ${todo.dueDate?`<span style="font-size:.72rem;color:${isOverdue?'#fca5a5':'var(--muted)'}">📅 ${todo.dueDate}${isOverdue?' ⚠️':''}</span>`:''}
+        </div>
+      </div>
+      <button onclick="deleteTodo('${todo.id}')" style="background:none;border:none;color:rgba(239,83,80,.5);cursor:pointer;font-size:.95rem;flex-shrink:0">🗑</button>
+    </div>`;
+  }).join('');
+}
+
+function addJobTodo() {
+  const input = document.getElementById('jobTodoInput');
+  const text = (input?.value || '').trim();
+  if (!text) { input?.focus(); return; }
+  if (!conDb || !conCurrentJobId) return;
+  const asgnEl = document.getElementById('jobTodoAssignee');
+  const asgnEmail = asgnEl?.value || '';
+  const asgnName = asgnEmail ? (asgnEl.options[asgnEl.selectedIndex]?.text || '') : '';
+  const job = conJobs.find(j => j.id === conCurrentJobId);
+  coll('todos').add({
+    text,
+    priority: document.getElementById('jobTodoPriority')?.value || 'normal',
+    dueDate: document.getElementById('jobTodoDue')?.value || '',
+    jobId: conCurrentJobId,
+    jobName: job?.name || '',
+    assignee: asgnEmail,
+    assigneeName: asgnName,
+    done: false,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdBy: conCurrentUser?.email || '',
+    createdByName: conCurrentUser?.displayName || conCurrentUser?.email || ''
+  }).then(() => {
+    if (input) input.value = '';
+    const due = document.getElementById('jobTodoDue'); if (due) due.value = '';
+    // allTodos updates via snapshot; re-render shortly after
+    setTimeout(() => renderJobTodos(conCurrentJobId), 400);
+  }).catch(e => alert('Error: ' + e.message));
+}
+
+// ════════════════════════════════════════════════════
+// ── SELECTIONS (customer material/finish choices) ──
+// Stored at jobs/{id}/selections
+// ════════════════════════════════════════════════════
+const SELECTION_ROOMS = ['Exterior','Kitchen','Living','Dining','Entry','Hallway','Bedroom 1','Bedroom 2','Bedroom 3','Bathroom 1','Bathroom 2','Bathroom 3','Basement','Garage','Global','Other'];
+let _selections = [];
+function loadSelections(jobId) {
+  const list = document.getElementById('selectionsList');
+  if (!list) return;
+  list.innerHTML = '<div class="small muted" style="padding:12px">Loading selections…</div>';
+  coll('jobs').doc(jobId).collection('selections').get()
+    .then(snap => { _selections = []; snap.forEach(d => _selections.push({ id:d.id, ...d.data() })); renderSelections(); })
+    .catch(() => { _selections = []; renderSelections(); });
+}
+function renderSelections() {
+  const list = document.getElementById('selectionsList');
+  const sum = document.getElementById('selectionsSummary');
+  if (!list) return;
+  const total = _selections.length;
+  const chosen = _selections.filter(s => s.status === 'Selected' || s.status === 'Approved' || s.status === 'Ordered').length;
+  if (sum) sum.innerHTML = `<span>${total} item(s)</span><span style="color:#a3f2d2">${chosen} chosen</span><span>${total-chosen} pending</span>`;
+  if (!total) {
+    list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-style:italic">No selections yet. Add materials and finishes the customer needs to choose.</div>';
+    return;
+  }
+  // Group by room
+  const byRoom = {};
+  _selections.forEach(s => { const r = s.room || 'Other'; (byRoom[r] = byRoom[r] || []).push(s); });
+  const statusColor = { Pending:'#f59e0b', Selected:'#4d8dff', Approved:'#1dbb87', Ordered:'#8b5cf6' };
+  list.innerHTML = Object.keys(byRoom).map(room => {
+    const items = byRoom[room].map(s => {
+      const c = statusColor[s.status] || '#8ea3c8';
+      return `<div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(110,145,210,.07)">
+        <div><div style="font-weight:700;font-size:.86rem">${esc(s.item||'')}</div>
+          <div style="font-size:.74rem;color:var(--muted)">${esc(s.choice||'Not yet chosen')}${s.cost?` · $${Number(s.cost).toLocaleString()}`:''}</div></div>
+        <span style="font-size:.68rem;font-weight:700;color:${c};background:${c}22;border-radius:999px;padding:2px 9px">${esc(s.status||'Pending')}</span>
+        <button onclick="deleteSelection('${s.id}')" style="background:none;border:none;color:rgba(239,83,80,.5);cursor:pointer">🗑</button>
+      </div>`;
+    }).join('');
+    return `<div class="kt-card" style="padding:14px 16px;margin-bottom:12px">
+      <div style="font-weight:800;font-size:.92rem;margin-bottom:6px;color:var(--amber)">${esc(room)}</div>${items}</div>`;
+  }).join('');
+}
+function openAddSelection() {
+  const room = prompt('Room (e.g. Kitchen, Bathroom 1, Exterior):', 'Kitchen');
+  if (room === null) return;
+  const item = prompt('What needs to be selected? (e.g. Flooring, Countertop, Paint color):');
+  if (!item) return;
+  const choice = prompt('Customer\'s choice (leave blank if not chosen yet):') || '';
+  if (!conDb || !conCurrentJobId) return;
+  coll('jobs').doc(conCurrentJobId).collection('selections').add({
+    room: room || 'Other', item, choice, status: choice ? 'Selected' : 'Pending', cost: 0,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(() => loadSelections(conCurrentJobId)).catch(e => alert('Error: ' + e.message));
+}
+function deleteSelection(id) {
+  if (!conDb || !conCurrentJobId || !confirm('Delete this selection?')) return;
+  coll('jobs').doc(conCurrentJobId).collection('selections').doc(id).delete()
+    .then(() => loadSelections(conCurrentJobId)).catch(e => alert('Error: ' + e.message));
+}
+
+// ════════════════════════════════════════════════════
+// ── SPECIFICATIONS (scope pulled from the estimate) ──
+// Read-only view grouped by room/trade from estimate line items.
+// ════════════════════════════════════════════════════
+function loadSpecifications(jobId) {
+  const list = document.getElementById('specificationsList');
+  if (!list) return;
+  list.innerHTML = '<div class="small muted" style="padding:12px">Building specifications from the estimate…</div>';
+  const jobRef = coll('jobs').doc(jobId);
+  const items = [];
+  jobRef.collection('estimateGroups').get().then(async groupSnap => {
+    for (const g of groupSnap.docs) {
+      const gName = g.data().name || 'General';
+      const direct = await jobRef.collection('estimateGroups').doc(g.id).collection('items').get();
+      direct.forEach(d => items.push({ group:gName, ...d.data() }));
+      const subs = await jobRef.collection('estimateGroups').doc(g.id).collection('subgroups').get();
+      for (const s of subs.docs) {
+        const sName = s.data().name || '';
+        const it = await jobRef.collection('estimateGroups').doc(g.id).collection('subgroups').doc(s.id).collection('items').get();
+        it.forEach(d => items.push({ group:gName, subgroup:sName, ...d.data() }));
+      }
+    }
+    renderSpecifications(items);
+  }).catch(() => renderSpecifications([]));
+}
+function renderSpecifications(items) {
+  const list = document.getElementById('specificationsList');
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-style:italic">No estimate line items to build specifications from. Build the estimate first.</div>';
+    return;
+  }
+  // Group by room (fallback to subgroup, then group), then by trade
+  const byRoom = {};
+  items.forEach(it => {
+    const room = it.room || it.subgroup || it.group || 'General';
+    (byRoom[room] = byRoom[room] || []).push(it);
+  });
+  list.innerHTML = Object.keys(byRoom).sort().map(room => {
+    const rows = byRoom[room].map(it => {
+      const desc = it.description || it.name || it.desc || '';
+      const spec = it.specifications || it.spec || '';
+      const qty = it.qty ? `${it.qty}${it.unit?' '+it.unit:''}` : '';
+      return `<div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:8px 0;border-bottom:1px solid rgba(110,145,210,.07)">
+        <div><div style="font-size:.85rem;font-weight:600">${esc(desc)}</div>
+          ${spec?`<div style="font-size:.74rem;color:var(--muted)">${esc(spec)}</div>`:''}
+          ${it.trade?`<span style="font-size:.68rem;color:var(--amber)">${esc(it.trade)}</span>`:''}</div>
+        <div style="font-size:.78rem;color:var(--muted);white-space:nowrap">${esc(qty)}</div>
+      </div>`;
+    }).join('');
+    return `<div class="kt-card" style="padding:14px 16px;margin-bottom:12px">
+      <div style="font-weight:800;font-size:.92rem;margin-bottom:6px;color:var(--amber)">${esc(room)} <span style="color:var(--muted);font-weight:400">· ${byRoom[room].length} item(s)</span></div>${rows}</div>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════════════════
+// ── PLANS (blueprint/drawing uploads) ──
+// Stored as documents with category 'Plan' + jobId.
+// ════════════════════════════════════════════════════
+function loadPlans(jobId) {
+  const list = document.getElementById('plansList');
+  if (!list) return;
+  list.innerHTML = '<div class="small muted" style="padding:12px">Loading plans…</div>';
+  coll('documents').where('jobId','==',jobId).where('category','==','Plan').get()
+    .then(snap => { const plans = []; snap.forEach(d => plans.push({ id:d.id, ...d.data() })); renderPlans(plans); })
+    .catch(() => renderPlans([]));
+}
+function renderPlans(plans) {
+  const list = document.getElementById('plansList');
+  if (!list) return;
+  if (!plans.length) {
+    list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-style:italic">No plans uploaded yet. Upload blueprints or site drawings for the crew.</div>';
+    return;
+  }
+  list.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px">' +
+    plans.map(p => {
+      const isImg = (p.type||'').startsWith('image/') && p.dataUrl;
+      const thumb = isImg
+        ? `<img src="${p.dataUrl}" style="width:100%;height:120px;object-fit:cover;border-radius:8px 8px 0 0" />`
+        : `<div style="height:120px;display:flex;align-items:center;justify-content:center;font-size:2rem;background:rgba(110,145,210,.08);border-radius:8px 8px 0 0">📄</div>`;
+      const open = p.dataUrl ? `onclick="window.open('${p.dataUrl}','_blank')" style="cursor:pointer"` : '';
+      return `<div class="kt-card" style="padding:0;overflow:clip" ${open}>
+        ${thumb}
+        <div style="padding:8px 10px">
+          <div style="font-size:.78rem;font-weight:700;white-space:nowrap;overflow:clip;text-overflow:ellipsis">${esc(p.name||'Plan')}</div>
+          <div style="font-size:.68rem;color:var(--muted)">${p.uploadedDate||''}</div>
+        </div></div>`;
+    }).join('') + '</div>';
+}
+async function handlePlanUpload(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length || !conDb || !conCurrentJobId) return;
+  const job = conJobs.find(j => j.id === conCurrentJobId);
+  const list = document.getElementById('plansList');
+  if (list) list.innerHTML = '<div class="small muted" style="padding:12px">Uploading…</div>';
+  for (const file of files) {
+    try {
+      let dataUrl = null;
+      if (file.size <= DOC_SIZE_LIMIT) dataUrl = await fileToBase64(file);
+      else if (!confirm(`"${file.name}" is over 500KB and can't be stored yet. Save name only?`)) continue;
+      await coll('documents').add({
+        name: file.name, type: file.type||'application/octet-stream', size: file.size,
+        category: 'Plan', jobId: conCurrentJobId, jobName: job?.name || '', dataUrl,
+        uploadedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        uploadedDate: new Date().toISOString().split('T')[0],
+        uploadedBy: conCurrentUser?.email || ''
+      });
+    } catch(e) { alert('Error uploading ' + file.name + ': ' + e.message); }
+  }
+  document.getElementById('planUpload').value = '';
+  loadPlans(conCurrentJobId);
+}
+
+// ════════════════════════════════════════════════════
+// ── JOB MESSAGES (internal team thread) ──
+// Stored at jobs/{id}/messages, real-time via onSnapshot.
+// ════════════════════════════════════════════════════
+let _msgUnsub = null;
+let _msgJobId = null;
+
+function loadJobMessages(jobId) {
+  _msgJobId = jobId;
+  const listEl = document.getElementById('messagesList');
+  if (listEl) listEl.innerHTML = '<div class="small muted" style="padding:12px">Loading messages…</div>';
+  // Detach any prior listener before attaching a new one
+  if (_msgUnsub) { try { _msgUnsub(); } catch(e){} _msgUnsub = null; }
+  if (!conDb) return;
+  _msgUnsub = coll('jobs').doc(jobId).collection('messages').orderBy('createdAt','asc')
+    .onSnapshot(snap => {
+      const msgs = [];
+      snap.forEach(d => msgs.push({ id:d.id, ...d.data() }));
+      renderJobMessages(msgs);
+    }, () => {
+      // Fallback without orderBy if index/ordering unavailable
+      coll('jobs').doc(jobId).collection('messages').onSnapshot(snap => {
+        const msgs = [];
+        snap.forEach(d => msgs.push({ id:d.id, ...d.data() }));
+        msgs.sort((a,b) => (a.createdMs||0) - (b.createdMs||0));
+        renderJobMessages(msgs);
+      });
+    });
+}
+
+function renderJobMessages(msgs) {
+  const listEl = document.getElementById('messagesList');
+  if (!listEl) return;
+  if (!msgs.length) {
+    listEl.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-style:italic">No messages yet. Start the conversation below.</div>';
+    return;
+  }
+  const myEmail = conCurrentUser?.email || '';
+  listEl.innerHTML = msgs.map(m => {
+    const mine = m.authorEmail === myEmail;
+    const when = m.createdMs ? new Date(m.createdMs).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+    return `<div style="display:flex;flex-direction:column;align-items:${mine?'flex-end':'flex-start'}">
+      <div style="max-width:78%;background:${mine?'rgba(217,119,6,.14)':'rgba(110,145,210,.09)'};border:1px solid ${mine?'rgba(217,119,6,.28)':'rgba(110,145,210,.16)'};border-radius:${mine?'14px 14px 4px 14px':'14px 14px 14px 4px'};padding:9px 13px">
+        <div style="font-size:.7rem;color:var(--amber);font-weight:700;margin-bottom:3px">${esc(m.authorName||m.authorEmail||'Unknown')}</div>
+        <div style="font-size:.88rem;color:#eaf0fb;white-space:pre-wrap;word-break:break-word">${esc(m.text||'')}</div>
+      </div>
+      <div style="font-size:.66rem;color:var(--muted);margin-top:3px;padding:0 4px">${when}</div>
+    </div>`;
+  }).join('');
+  // Scroll to newest
+  listEl.scrollTop = listEl.scrollHeight;
+}
+
+function sendJobMessage() {
+  const input = document.getElementById('messageInput');
+  const text = (input?.value || '').trim();
+  if (!text || !conDb || !conCurrentJobId) return;
+  const data = {
+    text,
+    authorEmail: conCurrentUser?.email || '',
+    authorName: conCurrentUser?.displayName || conCurrentUser?.email || 'Unknown',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdMs: Date.now()
+  };
+  if (input) input.value = '';
+  coll('jobs').doc(conCurrentJobId).collection('messages').add(data)
+    .catch(e => { alert('Error sending: ' + e.message); if (input) input.value = text; });
+}
+
+// ════════════════════════════════════════════════════
+// ── JOB REPORTS (budget vs actual) ──
+// ════════════════════════════════════════════════════
+function renderJobReports(jobId) {
+  const el = document.getElementById('reportsContent');
+  if (!el) return;
+  const job = conJobs.find(j => j.id === jobId);
+  if (!job) { el.innerHTML = '<div class="small muted">Job not found.</div>'; return; }
+
+  const fmt = v => '$' + Number(v||0).toLocaleString(undefined,{maximumFractionDigits:0});
+  const pct = v => (v||0).toFixed(1) + '%';
+
+  const contract = getJobValue(job);
+  const approvedCO = (Array.isArray(conCOs)?conCOs:[]).filter(c=>c.status==='Approved').reduce((s,c)=>s+Number(c.amount||0),0);
+  const contractTotal = contract + approvedCO;
+  const estCost = job.estCost || 0;
+  const actualCost = job.actualCost || 0;
+  const collected = (typeof job.collected === 'number') ? job.collected : 0;
+  const invoiced = (typeof job.invoiced === 'number') ? job.invoiced : 0;
+
+  const estProfit = contractTotal - estCost;
+  const estMargin = contractTotal > 0 ? estProfit/contractTotal*100 : 0;
+  const actualProfit = contractTotal - actualCost;
+  const actualMargin = contractTotal > 0 ? actualProfit/contractTotal*100 : 0;
+  const costVariance = estCost - actualCost; // positive = under budget
+  const marginDelta = actualMargin - estMargin;
+
+  // Warnings for missing data so the numbers aren't silently misleading
+  const warnings = [];
+  if (!contract) warnings.push('No contract/approved price set — import the budget CSV or set it on the job.');
+  if (!estCost) warnings.push('No estimated cost — open the Estimate tab or sync from estimate.');
+  if (!actualCost) warnings.push('No actual cost recorded yet — enter it in Financials as bills come in.');
+
+  const row = (label, budget, actual, variance, varGood) => `
+    <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:10px;padding:11px 14px;border-bottom:1px solid rgba(110,145,210,.08);align-items:center">
+      <div style="font-weight:600;font-size:.86rem">${label}</div>
+      <div style="text-align:right;font-size:.86rem">${budget}</div>
+      <div style="text-align:right;font-size:.86rem">${actual}</div>
+      <div style="text-align:right;font-size:.86rem;font-weight:700;color:${variance==null?'var(--muted)':(varGood?'#a3f2d2':'#fca5a5')}">${variance==null?'—':variance}</div>
+    </div>`;
+
+  let html = '';
+
+  if (warnings.length) {
+    html += '<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:10px;padding:12px 14px;margin-bottom:16px">'
+      + '<div style="font-weight:700;color:#fcd34d;font-size:.82rem;margin-bottom:5px">⚠ Some figures are incomplete</div>'
+      + warnings.map(w => '<div style="font-size:.78rem;color:var(--muted)">• ' + esc(w) + '</div>').join('') + '</div>';
+  }
+
+  // Headline cards
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px">';
+  const card = (label, val, color) => `<div class="kt-card" style="padding:14px 16px"><div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700">${label}</div><div style="font-size:1.3rem;font-weight:900;color:${color||'#eaf0fb'};margin-top:4px">${val}</div></div>`;
+  html += card('Contract (+ COs)', fmt(contractTotal), '#a3f2d2');
+  html += card('Projected Margin', pct(estMargin), estMargin>=0?'#a3f2d2':'#fca5a5');
+  html += card('Actual Margin', actualCost?pct(actualMargin):'—', actualMargin>=0?'#a3f2d2':'#fca5a5');
+  html += card('Margin Δ', actualCost?(marginDelta>=0?'+':'')+pct(marginDelta):'—', marginDelta>=0?'#a3f2d2':'#fca5a5');
+  html += '</div>';
+
+  // Budget vs Actual table
+  html += '<div class="kt-card" style="padding:0;overflow:clip;margin-bottom:16px">';
+  html += '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:10px;padding:11px 14px;background:rgba(110,145,210,.06);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;font-weight:700;color:var(--muted)"><div>Line</div><div style="text-align:right">Budget</div><div style="text-align:right">Actual</div><div style="text-align:right">Variance</div></div>';
+  html += row('Cost', fmt(estCost), actualCost?fmt(actualCost):'—', actualCost?fmt(costVariance):null, costVariance>=0);
+  html += row('Gross Profit', fmt(estProfit), actualCost?fmt(actualProfit):'—', actualCost?fmt(actualProfit-estProfit):null, (actualProfit-estProfit)>=0);
+  html += row('Margin %', pct(estMargin), actualCost?pct(actualMargin):'—', actualCost?((marginDelta>=0?'+':'')+pct(marginDelta)):null, marginDelta>=0);
+  html += '</div>';
+
+  // Billing progress
+  const billedPct = contractTotal>0 ? Math.min(invoiced/contractTotal*100,100) : 0;
+  const collectedPct = contractTotal>0 ? Math.min(collected/contractTotal*100,100) : 0;
+  html += '<div class="kt-card" style="padding:16px">';
+  html += '<div style="font-weight:800;font-size:.92rem;margin-bottom:12px">💵 Billing Progress</div>';
+  html += `<div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Invoiced: ${fmt(invoiced)} of ${fmt(contractTotal)} (${pct(billedPct)})</div>`;
+  html += `<div style="height:9px;background:rgba(110,145,210,.12);border-radius:6px;overflow:clip;margin-bottom:12px"><div style="height:100%;width:${billedPct}%;background:#4d8dff"></div></div>`;
+  html += `<div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Collected: ${fmt(collected)} of ${fmt(contractTotal)} (${pct(collectedPct)})</div>`;
+  html += `<div style="height:9px;background:rgba(110,145,210,.12);border-radius:6px;overflow:clip"><div style="height:100%;width:${collectedPct}%;background:#1dbb87"></div></div>`;
+  html += '</div>';
+
+  el.innerHTML = html;
+}
+
+// ── Estimate cost sync (rolls estimate line items into job.estCost) ──
+// Source of truth: sum(qty × unitCost) across all items, matching calcGroupTotals.
+// Writes estCost ONLY — never contractValue (that stays the approved/contract price).
+function syncJobEstimateCost(jobId, opts) {
+  opts = opts || {};
+  if (!conDb || !jobId) return Promise.resolve(null);
+  const jobRef = coll('jobs').doc(jobId);
+  let totalCost = 0, itemCount = 0;
+
+  return jobRef.collection('estimateGroups').get()
+    .then(async groupSnap => {
+      for (const groupDoc of groupSnap.docs) {
+        // Direct items on the group
+        const directSnap = await jobRef.collection('estimateGroups').doc(groupDoc.id).collection('items').get();
+        directSnap.forEach(d => {
+          const it = d.data();
+          totalCost += (it.qty||1) * (it.unitCost||0);
+          itemCount++;
+        });
+        // Subgroup items
+        const subSnap = await jobRef.collection('estimateGroups').doc(groupDoc.id).collection('subgroups').get();
+        for (const subDoc of subSnap.docs) {
+          const itemSnap = await jobRef.collection('estimateGroups').doc(groupDoc.id)
+            .collection('subgroups').doc(subDoc.id).collection('items').get();
+          itemSnap.forEach(d => {
+            const it = d.data();
+            totalCost += (it.qty||1) * (it.unitCost||0);
+            itemCount++;
+          });
+        }
+      }
+      if (itemCount === 0) return null; // no estimate → leave manual estCost untouched
+
+      const rounded = Math.round(totalCost);
+      const job = conJobs.find(j => j.id === jobId);
+      const current = job ? (job.estCost||0) : null;
+      // Only write if it actually changed (avoid needless writes / snapshot churn)
+      if (current !== null && Math.round(current) === rounded) return rounded;
+
+      await jobRef.update({ estCost: rounded, estCostSyncedAt: firebase.firestore.FieldValue.serverTimestamp() }).catch(()=>{});
+      if (job) job.estCost = rounded;
+      return rounded;
+    })
+    .catch(() => null);
+}
+
+function syncCurrentJobEstimateCost() {
+  const jobId = conCurrentJobId;
+  if (!jobId) return;
+  const btn = document.getElementById('dashSyncCostBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '⟳ Syncing…'; }
+  syncJobEstimateCost(jobId).then(cost => {
+    if (btn) { btn.disabled = false; btn.textContent = '⟳ Sync from Estimate'; }
+    if (cost === null) { alert('No estimate line items found on this job yet. Add items in the Estimate tab first.'); return; }
+    // Refresh the open dashboard financials
+    const job = conJobs.find(j => j.id === jobId);
+    if (job) refreshJobFinancials(job);
+  });
+}
+
+// Populates the financial bar, dashboard panel, and Financials-tab est/actual fields.
+function refreshJobFinancials(job) {
+  if (!job) return;
+  const fmt = v => '$' + Number(v||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
+  const cv = getJobValue(job);
+  const ec = job.estCost || 0;
+  const ac = job.actualCost || 0;
+  const profit = cv - ec;
+  const margin = cv ? (profit / cv * 100) : 0;
+
+  // Collected: prefer the imported JobTread figure; fall back to in-app invoice payments.
+  const jobInvs = (window._allInvoices || []).filter(i => i.jobId === job.id);
+  const inAppCollected = jobInvs.reduce((s,i) => s + (i.amtPaid||0), 0);
+  const collected = (typeof job.collected === 'number') ? job.collected : inAppCollected;
+  const balance = cv - collected;
+  const costToComplete = Math.max(0, ec - ac);
+  const projProfit = cv - ec;
+  const projMargin = cv > 0 ? (projProfit / cv * 100) : 0;
+
+  const setFin = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = fmt(val); };
+  // Top financial bar
+  setFin('fbarApproved', cv);
+  setFin('fbarCollected', collected);
+  setFin('fbarBalance', balance);
+  setFin('fbarCostComplete', costToComplete);
+  setFin('fbarProfit', projProfit);
+  const fbarM = document.getElementById('fbarMargin');
+  if (fbarM) { fbarM.textContent = projMargin.toFixed(1) + '%'; fbarM.style.color = projMargin > 0 ? '#a3f2d2' : '#f87171'; }
+
+  // Dashboard right panel
+  setFin('dashFinApproved', cv);
+  setFin('dashFinCollected', collected);
+  setFin('dashFinBalance', balance);
+  setFin('dashFinCost', ec);
+  setFin('dashFinProfit', projProfit);
+  const dashM = document.getElementById('dashFinMargin');
+  if (dashM) dashM.textContent = projMargin.toFixed(1) + '%';
+
+  // Financials tab est/actual block
+  setFin('finContract', cv);
+  setFin('finEstCost', ec);
+  setFin('finEstProfit', profit);
+  const finM = document.getElementById('finEstMargin');
+  if (finM) finM.textContent = margin.toFixed(1) + '%';
+  const finBar = document.getElementById('finMarginBar');
+  if (finBar) finBar.style.width = Math.min(Math.max(margin,0), 100) + '%';
+  setFin('finActualCost', ac);
+  const variance = ec - ac;
+  const varEl = document.getElementById('finVariance');
+  if (varEl) { varEl.textContent = (variance >= 0 ? '+' : '') + fmt(variance); varEl.style.color = variance >= 0 ? '#a3f2d2' : '#ef5350'; }
+  const aciEl = document.getElementById('actualCostInput');
+  if (aciEl) aciEl.value = ac || '';
+}
+
+
+let _geoCache = {}; // address -> {lat, lon}
+
+function _osmEmbed(lat, lon) {
+  const d = 0.008; // ~0.9km half-window for a tight neighborhood view
+  const west = (lon - d).toFixed(6), east = (lon + d).toFixed(6);
+  const south = (lat - d).toFixed(6), north = (lat + d).toFixed(6);
+  const bbox = `${west},${south},${east},${north}`;
+  const marker = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+  return 'https://www.openstreetmap.org/export/embed.html?bbox=' + bbox +
+         '&layer=mapnik&marker=' + marker;
+}
+
+function _renderMapIframe(mapEl, lat, lon, gmapsUrl) {
+  mapEl.innerHTML = '<iframe ' +
+    'width="100%" height="220" frameborder="0" style="border:0;filter:hue-rotate(190deg) saturate(0.7) brightness(0.8)" ' +
+    'src="' + _osmEmbed(lat, lon) + '" loading="lazy"></iframe>' +
+    '<a href="' + gmapsUrl + '" target="_blank" ' +
+    'style="position:absolute;bottom:8px;right:8px;background:rgba(6,14,28,.9);border:1px solid rgba(217,119,6,.4);border-radius:6px;padding:4px 10px;font-size:.72rem;color:var(--amber);font-weight:700;text-decoration:none;z-index:10">🗺 Google Maps ↗</a>';
+  mapEl.style.position = 'relative';
+}
+
+function renderJobMap(job) {
+  const mapEl = document.getElementById('detailMap');
+  if (!mapEl) return;
+  const addr = job.address || '';
+  const gmapsUrl = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(addr);
+
+  if (!addr) {
+    mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:.84rem">No address on file</div>';
+    return;
+  }
+
+  // 1. Cached coords on the job doc (one-time geocode, saved to Firestore)
+  if (typeof job.geoLat === 'number' && typeof job.geoLon === 'number') {
+    _renderMapIframe(mapEl, job.geoLat, job.geoLon, gmapsUrl);
+    return;
+  }
+  // 2. In-memory cache for this session
+  if (_geoCache[addr]) {
+    _renderMapIframe(mapEl, _geoCache[addr].lat, _geoCache[addr].lon, gmapsUrl);
+    return;
+  }
+
+  // 3. Geocode via Nominatim, then cache + persist
+  mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:.84rem">Locating address…</div>';
+  const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(addr);
+  fetch(url, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.json())
+    .then(results => {
+      if (!Array.isArray(results) || !results.length) throw new Error('no match');
+      const lat = parseFloat(results[0].lat);
+      const lon = parseFloat(results[0].lon);
+      if (isNaN(lat) || isNaN(lon)) throw new Error('bad coords');
+      _geoCache[addr] = { lat, lon };
+      // Only render if still viewing this job
+      if (conCurrentJobId === job.id) _renderMapIframe(mapEl, lat, lon, gmapsUrl);
+      // Persist to Firestore so we never geocode this job again
+      if (conDb) coll('jobs').doc(job.id).update({ geoLat: lat, geoLon: lon }).catch(() => {});
+      const jj = conJobs.find(j => j.id === job.id);
+      if (jj) { jj.geoLat = lat; jj.geoLon = lon; }
+    })
+    .catch(() => {
+      // Fallback: address text + Google Maps link, no misleading world map
+      mapEl.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px;color:var(--muted);font-size:.84rem;text-align:center;padding:12px">' +
+        '<div>📍 ' + esc(addr) + '</div>' +
+        '<a href="' + gmapsUrl + '" target="_blank" style="color:var(--amber);font-weight:700;text-decoration:none">Open in Google Maps ↗</a></div>';
+    });
+}
+
 function openJobDetail(jobId) {
   const job = conJobs.find(j => j.id === jobId);
   if (!job) return;
@@ -739,71 +1519,22 @@ function openJobDetail(jobId) {
   document.getElementById('detailAccessInfo').textContent = job.accessInfo || job.notes?.match(/Access: (.+)/)?.[1] || '—';
   document.getElementById('detailNotes').textContent = job.notes || '';
 
-  // Map — using OpenStreetMap via nominatim (free, no API key)
+  // Map — OpenStreetMap embed geocoded via Nominatim (free, no API key)
   const mapAddress = job.address || '';
-  const mapEl = document.getElementById('detailMap');
   const mapAddrEl = document.getElementById('detailMapAddress');
   if (mapAddrEl) mapAddrEl.textContent = mapAddress;
-  if (mapEl && mapAddress) {
-    const encodedAddr = encodeURIComponent(mapAddress);
-    const gmapsUrl = 'https://www.google.com/maps/search/?api=1&query=' + encodedAddr;
-    // Use OpenStreetMap embed — completely free, no API key
-    mapEl.innerHTML = '<iframe ' +
-      'width="100%" height="220" frameborder="0" style="border:0;filter:hue-rotate(190deg) saturate(0.7) brightness(0.8)" ' +
-      'src="https://www.openstreetmap.org/export/embed.html?bbox=-180,-90,180,90&layer=mapnik&marker=0,0&query=' + encodedAddr + '" ' +
-      'loading="lazy"></iframe>' +
-      '<a href="' + gmapsUrl + '" target="_blank" ' +
-      'style="position:absolute;bottom:8px;right:8px;background:rgba(6,14,28,.9);border:1px solid rgba(217,119,6,.4);border-radius:6px;padding:4px 10px;font-size:.72rem;color:var(--amber);font-weight:700;text-decoration:none;z-index:10">🗺 Google Maps ↗</a>';
-    mapEl.style.position = 'relative';
-  } else if (mapEl) {
-    mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:.84rem">No address on file</div>';
-  }
+  renderJobMap(job);
 
-  // Financials
-  const cv = getJobValue(job);
-  const ec = job.estCost || 0;
-  const ac = job.actualCost || 0;
-  const profit = cv - ec;
-  const margin = cv ? (profit / cv * 100) : 0;
+  // Financials (extracted so it can be re-run after estimate cost sync)
+  refreshJobFinancials(job);
 
-  // Calculate collected from invoices
-  const jobInvs = (window._allInvoices || []).filter(i => i.jobId === jobId);
-  const collected = jobInvs.reduce((s,i) => s + (i.amtPaid||0), 0);
-  const balance = cv - collected;
-  const costToComplete = Math.max(0, ec - ac);
-  const projProfit = cv - ec;
-  const projMargin = cv > 0 ? (projProfit / cv * 100) : 0;
-
-  // Financial bar
-  const setFin = (id, val, fmtFn) => { const el = document.getElementById(id); if (el) el.textContent = fmtFn(val); };
-  setFin('fbarApproved', cv, fmt);
-  setFin('fbarCollected', collected, fmt);
-  setFin('fbarBalance', balance, fmt);
-  setFin('fbarCostComplete', costToComplete, fmt);
-  setFin('fbarProfit', projProfit, fmt);
-  document.getElementById('fbarMargin').textContent = projMargin.toFixed(1) + '%';
-  document.getElementById('fbarMargin').style.color = projMargin > 0 ? '#a3f2d2' : '#f87171';
-
-  // Dashboard right panel financials
-  setFin('dashFinApproved', cv, fmt);
-  setFin('dashFinCollected', collected, fmt);
-  setFin('dashFinBalance', balance, fmt);
-  setFin('dashFinCost', ec, fmt);
-  setFin('dashFinProfit', projProfit, fmt);
-  document.getElementById('dashFinMargin').textContent = projMargin.toFixed(1) + '%';
-
-  // Financials tab
-  setFin('finContract', cv, fmt);
-  setFin('finEstCost', ec, fmt);
-  setFin('finEstProfit', profit, fmt);
-  document.getElementById('finEstMargin').textContent = margin.toFixed(1) + '%';
-  document.getElementById('finMarginBar').style.width = Math.min(margin, 100) + '%';
-  setFin('finActualCost', ac, fmt);
-  const variance = ec - ac;
-  const varEl = document.getElementById('finVariance');
-  if (varEl) { varEl.textContent = (variance >= 0 ? '+' : '') + fmt(variance); varEl.style.color = variance >= 0 ? '#a3f2d2' : '#ef5350'; }
-  const aciEl = document.getElementById('actualCostInput');
-  if (aciEl) aciEl.value = ac || '';
+  // Auto-sync estCost from estimate line items in the background, then refresh
+  syncJobEstimateCost(jobId).then(cost => {
+    if (cost !== null && conCurrentJobId === jobId) {
+      const j = conJobs.find(x => x.id === jobId);
+      if (j) refreshJobFinancials(j);
+    }
+  });
 
   // Weather
   if (job.address) loadJobWeather(job.address);
@@ -1679,7 +2410,7 @@ window.renderJCDTable = renderJCDTable;
 // conLoadJobs CO patch removed — consolidated into main function above
 
 function switchDetailTab(tab, btn) {
-  const allTabs = ['dashboard','financials','estimate','changeorders','subs','phases','logs','invoices','documents','activity','retrospective'];
+  const allTabs = ['dashboard','financials','estimate','changeorders','subs','phases','logs','invoices','documents','activity','retrospective','todos','selections','specifications','plans','messages','reports'];
   allTabs.forEach(t => {
     const key = 'detail' + t.charAt(0).toUpperCase() + t.slice(1);
     const el = document.getElementById(key);
@@ -1702,6 +2433,12 @@ function switchDetailTab(tab, btn) {
   if (tab === 'activity') loadJobActivity(conCurrentJobId, 'full');
   if (tab === 'retrospective') loadRetrospective(conCurrentJobId);
   if (tab === 'financials') renderFinancialsHub(conCurrentJobId);
+  if (tab === 'todos') renderJobTodos(conCurrentJobId);
+  if (tab === 'selections') loadSelections(conCurrentJobId);
+  if (tab === 'specifications') loadSpecifications(conCurrentJobId);
+  if (tab === 'plans') loadPlans(conCurrentJobId);
+  if (tab === 'messages') loadJobMessages(conCurrentJobId);
+  if (tab === 'reports') renderJobReports(conCurrentJobId);
 }
 
 // ════════════════════════════════════════════════════
@@ -1905,6 +2642,26 @@ window.saveLog = saveLog;
 window.deleteLog = deleteLog;
 window.switchConTab = switchConTab;
 window.switchDetailTab = switchDetailTab;
+window.renderJobMap = renderJobMap;
+window.loadTeamCache = loadTeamCache;
+window.getTeamMemberOpts = getTeamMemberOpts;
+window.getTeamMemberOptsEmail = getTeamMemberOptsEmail;
+window.renderJobTodos = renderJobTodos;
+window.addJobTodo = addJobTodo;
+window.loadSelections = loadSelections;
+window.openAddSelection = openAddSelection;
+window.deleteSelection = deleteSelection;
+window.loadSpecifications = loadSpecifications;
+window.loadPlans = loadPlans;
+window.handlePlanUpload = handlePlanUpload;
+window.loadJobMessages = loadJobMessages;
+window.sendJobMessage = sendJobMessage;
+window.renderJobReports = renderJobReports;
+window.handleImportFiles = handleImportFiles;
+window.commitImport = commitImport;
+window.syncJobEstimateCost = syncJobEstimateCost;
+window.syncCurrentJobEstimateCost = syncCurrentJobEstimateCost;
+window.refreshJobFinancials = refreshJobFinancials;
 window.finhubToggle = finhubToggle;
 window.renderFinancialsHub = renderFinancialsHub;
 window.openVendorFromBill = openVendorFromBill;
@@ -3676,6 +4433,7 @@ function conLoadJobs() {
     loadGlobalPhases();
     loadCalendarEvents();
     loadPOs();
+    loadTeamCache();
     renderHomeDashboard();
   });
 }
@@ -8351,11 +9109,15 @@ function updateEstimateSummary() {
   setEl('estKpiMargin', Math.round(margin)+'%', marginColor);
   setEl('estKpiItems', totalItems);
 
-  // Update job contract value
-  if (conCurrentJobId && conDb && totalPrice > 0) {
+  // Sync estCost from the estimate. Do NOT overwrite contractValue —
+  // the contract/approved price is set on the job and only moves via change orders.
+  if (conCurrentJobId && conDb && totalItems > 0) {
+    const rounded = Math.round(totalCost);
     coll('jobs').doc(conCurrentJobId).update({
-      contractValue: totalPrice, estCost: totalCost
+      estCost: rounded, estCostSyncedAt: firebase.firestore.FieldValue.serverTimestamp()
     }).catch(()=>{});
+    const job = conJobs.find(j => j.id === conCurrentJobId);
+    if (job) { job.estCost = rounded; refreshJobFinancials(job); }
   }
 }
 

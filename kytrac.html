@@ -920,7 +920,7 @@
     <div class="kt-logo">
       <div class="kt-logo-mark">⚡ KYTRAC</div>
       <div class="kt-logo-tag" id="ktCompanyTag">7 Pillars Contracting</div>
-      <div class="kt-logo-version" id="ktVersionTag">Version 1.9.2 · 05/Jul/2026</div>
+      <div class="kt-logo-version" id="ktVersionTag">Version 1.9.6 · 05/Jul/2026</div>
     </div>
 
     <nav class="kt-nav">
@@ -1768,7 +1768,7 @@
               <div class="settings-grid">
                 <div class="settings-field full" style="grid-column:1/-1">
                   <label>Company Name *</label>
-                  <input id="settCompanyName" placeholder="e.g. Red Maples Construction LLC" />
+                  <input id="settCompanyName" placeholder="e.g. 7 Pillars Contracting LLC" />
                 </div>
                 <div class="settings-field">
                   <label>Phone</label>
@@ -1862,6 +1862,23 @@
           <div id="teamMemberList">
             <div class="small muted" style="font-style:italic">Loading team...</div>
           </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-head">
+          <h3>📥 Import Financials (JobTread CSV)</h3>
+          <p>Update job financials from JobTread exports. Matches jobs by job number — customer names are ignored and never stored. Export from JobTread, then drop the file(s) here.</p>
+        </div>
+        <div class="settings-body">
+          <div id="importDrop" onclick="document.getElementById('importFile').click()"
+               style="border:2px dashed rgba(110,145,210,.3);border-radius:12px;padding:26px;text-align:center;cursor:pointer;transition:background .15s">
+            <div style="font-size:1.6rem;margin-bottom:6px">📊</div>
+            <div style="font-weight:700;margin-bottom:4px">Tap to choose CSV file(s), or drag them here</div>
+            <div class="small muted">Recognizes: Customer Payments, Customer Invoices, Invoice Cost Items</div>
+          </div>
+          <input type="file" id="importFile" accept=".csv" multiple style="display:none" onchange="handleImportFiles(this.files)" />
+          <div id="importResult" style="margin-top:14px"></div>
         </div>
       </div>
 
@@ -3122,11 +3139,17 @@
         <button class="con-subtab" onclick="switchDetailTab('invoices',this)">🧾 Invoices</button>
         <button class="con-subtab" onclick="switchDetailTab('changeorders',this)">🔄 Change Orders</button>
         <button class="con-subtab" onclick="switchDetailTab('phases',this)">📅 Schedule</button>
+        <button class="con-subtab" onclick="switchDetailTab('todos',this)">✅ To-Dos</button>
         <button class="con-subtab" onclick="switchDetailTab('logs',this)">📝 Daily Logs</button>
+        <button class="con-subtab" onclick="switchDetailTab('selections',this)">🎨 Selections</button>
+        <button class="con-subtab" onclick="switchDetailTab('specifications',this)">📐 Specifications</button>
+        <button class="con-subtab" onclick="switchDetailTab('plans',this)">🗺 Plans</button>
         <button class="con-subtab" onclick="switchDetailTab('subs',this)">👷 Subs</button>
         <button class="con-subtab" onclick="switchDetailTab('activity',this)">📡 Activity</button>
         <button class="con-subtab" onclick="switchDetailTab('documents',this)">📁 Files</button>
         <button class="con-subtab" onclick="switchDetailTab('financials',this)">💰 Financials</button>
+        <button class="con-subtab" onclick="switchDetailTab('messages',this)">💬 Messages</button>
+        <button class="con-subtab" onclick="switchDetailTab('reports',this)">📊 Reports</button>
         <button class="con-subtab" onclick="switchDetailTab('retrospective',this)">📈 Retrospective</button>
       </div>
     </div>
@@ -3199,6 +3222,7 @@
                 <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Est. Cost</span><span id="dashFinCost"></span></div>
                 <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Proj. Profit</span><span id="dashFinProfit" style="font-weight:700;color:#a3f2d2"></span></div>
                 <div style="display:flex;justify-content:space-between;font-size:.84rem"><span class="muted">Margin</span><span id="dashFinMargin" style="font-weight:700;color:#a3f2d2"></span></div>
+                <button id="dashSyncCostBtn" onclick="syncCurrentJobEstimateCost()" style="width:100%;margin-top:10px;padding:7px;border-radius:8px;border:1px solid rgba(110,145,210,.25);background:rgba(110,145,210,.08);color:var(--muted);font-size:.76rem;font-weight:700;cursor:pointer">⟳ Sync from Estimate</button>
               </div>
             </div>
           </div>
@@ -3504,10 +3528,86 @@
 
       </div>
 
+      <!-- ══ TO-DOS TAB ══ -->
+      <div id="detailTodos" style="display:none">
+        <div class="kt-card" style="padding:16px;margin-bottom:14px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input id="jobTodoInput" placeholder="Add a to-do for this job…" style="flex:1;min-width:180px"
+                   onkeydown="if(event.key==='Enter')addJobTodo()" />
+            <select id="jobTodoAssignee" style="min-width:140px"></select>
+            <select id="jobTodoPriority" style="min-width:110px">
+              <option value="normal">Normal</option><option value="med">Medium</option><option value="high">High</option>
+            </select>
+            <input id="jobTodoDue" type="date" style="min-width:140px" />
+            <button class="btn-amber" onclick="addJobTodo()" style="padding:8px 16px;font-weight:700">+ Add</button>
+          </div>
+        </div>
+        <div id="jobTodoStats" style="display:flex;gap:14px;font-size:.8rem;color:var(--muted);margin-bottom:12px;padding:0 4px"></div>
+        <div id="jobTodoList"></div>
+      </div>
+
+      <!-- ══ SELECTIONS TAB ══ -->
+      <div id="detailSelections" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div>
+            <div style="font-weight:800;font-size:1.05rem">🎨 Customer Selections</div>
+            <div style="font-size:.8rem;color:var(--muted);margin-top:2px">Material & finish choices by room — track what the customer picked</div>
+          </div>
+          <button class="btn-amber" onclick="openAddSelection()" style="padding:8px 16px;font-weight:700">+ Selection</button>
+        </div>
+        <div id="selectionsSummary" style="display:flex;gap:14px;font-size:.8rem;color:var(--muted);margin-bottom:12px;padding:0 4px"></div>
+        <div id="selectionsList"></div>
+      </div>
+
+      <!-- ══ SPECIFICATIONS TAB ══ -->
+      <div id="detailSpecifications" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div>
+            <div style="font-weight:800;font-size:1.05rem">📐 Specifications</div>
+            <div style="font-size:.8rem;color:var(--muted);margin-top:2px">Scope of work — pulled from the estimate, grouped by room & trade</div>
+          </div>
+          <button class="btn" onclick="loadSpecifications(conCurrentJobId)" style="padding:8px 14px">⟳ Refresh</button>
+        </div>
+        <div id="specificationsList"></div>
+      </div>
+
+      <!-- ══ PLANS TAB ══ -->
+      <div id="detailPlans" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div>
+            <div style="font-weight:800;font-size:1.05rem">🗺 Plans & Blueprints</div>
+            <div style="font-size:.8rem;color:var(--muted);margin-top:2px">Upload site plans, blueprints, and drawings for the crew</div>
+          </div>
+          <button class="btn-amber" onclick="document.getElementById('planUpload').click()" style="padding:8px 16px;font-weight:700">+ Upload Plan</button>
+          <input type="file" id="planUpload" accept="image/*,.pdf" style="display:none" onchange="handlePlanUpload(this.files)" />
+        </div>
+        <div id="plansList"></div>
+      </div>
+
+      <!-- ══ MESSAGES TAB ══ -->
+      <div id="detailMessages" style="display:none">
+        <div style="font-weight:800;font-size:1.05rem;margin-bottom:2px">💬 Job Messages</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:14px">Internal thread for the team — Jason, Travis, Shane, and crew leads</div>
+        <div id="messagesList" style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;max-height:52vh;overflow:auto;padding:4px"></div>
+        <div class="kt-card" style="padding:12px;display:flex;gap:8px;align-items:flex-end">
+          <textarea id="messageInput" placeholder="Write a message to the team…" rows="2"
+                    style="flex:1;resize:none;min-height:44px" onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))sendJobMessage()"></textarea>
+          <button class="btn-amber" onclick="sendJobMessage()" style="padding:10px 18px;font-weight:700;white-space:nowrap">Send</button>
+        </div>
+        <div style="font-size:.68rem;color:var(--muted);margin-top:6px;padding-left:4px">⌘/Ctrl + Enter to send</div>
+      </div>
+
+      <!-- ══ REPORTS TAB ══ -->
+      <div id="detailReports" style="display:none">
+        <div style="font-weight:800;font-size:1.05rem;margin-bottom:2px">📊 Job Reports</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:16px">Budget vs projected vs actual — where the money's going on this job</div>
+        <div id="reportsContent"></div>
+      </div>
+
     </div><!-- end modal-body -->
   </div>
 </div><!-- end jobDetailModal -->
 
-<script src="kytrac-app.js?v=202606261548"></script>
+<script src="kytrac-app.js?v=20260705196"></script>
 </body>
 </html>
