@@ -1,4 +1,4 @@
-// KYTRAC Application JavaScript v1.6.0
+// KYTRAC Application JavaScript v1.9.2 · 05/Jul/2026
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -1701,6 +1701,189 @@ function switchDetailTab(tab, btn) {
   if (tab === 'invoices') loadJobInvoices(conCurrentJobId);
   if (tab === 'activity') loadJobActivity(conCurrentJobId, 'full');
   if (tab === 'retrospective') loadRetrospective(conCurrentJobId);
+  if (tab === 'financials') renderFinancialsHub(conCurrentJobId);
+}
+
+// ════════════════════════════════════════════════════
+// ── FINANCIAL HUB (per-job) ──
+// ════════════════════════════════════════════════════
+let _fhInvoices = [];
+let _fhBills = [];
+let _fhBillsLoadedFor = null;
+
+function finhubToggle(bodyId, headEl) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  const chev = headEl ? headEl.querySelector('.finhub-chev') : null;
+  if (chev) chev.classList.toggle('closed', open);
+}
+
+const FH_INV_COLORS = { Paid:'#1dbb87', 'Partially Paid':'#f59e0b', Partial:'#f59e0b', Sent:'#4d8dff', Draft:'#8ea3c8', Overdue:'#ef5350' };
+const FH_CO_COLORS  = { Approved:'#1dbb87', Pending:'#f59e0b', Rejected:'#ef5350', Void:'#8ea3c8' };
+const FH_BILL_COLORS = { Paid:'#1dbb87', Partial:'#f97316', Unpaid:'#f59e0b', Overdue:'#ef5350' };
+
+function fhBadge(txt, color) {
+  return `<span class="finhub-badge" style="color:${color};background:${color}22">${esc(txt)}</span>`;
+}
+function fhMoney(n) { return '$' + Math.round(n||0).toLocaleString(); }
+
+// Load bills tagged to this job across all vendors (bills live under vendors/{id}/bills with a jobId field)
+function fhLoadJobBills(jobId, cb) {
+  if (!conDb || !Array.isArray(allVendors) || !allVendors.length) { _fhBills = []; cb && cb(); return; }
+  const bills = [];
+  let pending = allVendors.length;
+  allVendors.forEach(v => {
+    coll('vendors').doc(v.id).collection('bills').where('jobId','==',jobId).get()
+      .then(snap => { snap.forEach(d => bills.push({ id:d.id, vendorId:v.id, vendorName:v.name, ...d.data() })); })
+      .catch(() => {})
+      .finally(() => { if (--pending === 0) { _fhBills = bills; cb && cb(); } });
+  });
+}
+
+function renderFinancialsHub(jobId) {
+  const job = conJobs.find(j => j.id === jobId);
+  if (!job) return;
+
+  // Invoices (subcollection on job) — one-shot get
+  coll('jobs').doc(jobId).collection('invoices').get()
+    .then(snap => { _fhInvoices = []; snap.forEach(d => _fhInvoices.push({ id:d.id, ...d.data() })); fhRenderInvoices(); fhRenderTotals(job); })
+    .catch(() => { _fhInvoices = []; fhRenderInvoices(); fhRenderTotals(job); });
+
+  // Change orders already loaded into conCOs when job opened
+  fhRenderCOs();
+
+  // Bills across vendors
+  fhRenderBillsLoading();
+  fhLoadJobBills(jobId, () => { fhRenderBills(); fhRenderTotals(job); });
+
+  fhRenderEva();
+}
+
+function fhRenderInvoices() {
+  const el = document.getElementById('fhInvSec');
+  const cnt = document.getElementById('fhInvCount');
+  const sum = document.getElementById('fhInvSum');
+  if (!el) return;
+  const invs = _fhInvoices.slice().sort((a,b) => (b.date||'').localeCompare(a.date||''));
+  const total = invs.reduce((s,i)=>s+(i.total||0),0);
+  const paid = invs.reduce((s,i)=>s+(i.amtPaid||0),0);
+  if (cnt) cnt.textContent = invs.length;
+  if (sum) sum.textContent = invs.length ? `${fhMoney(paid)} / ${fhMoney(total)} collected` : '';
+  const today = new Date().toISOString().split('T')[0];
+  if (!invs.length) { el.innerHTML = '<div class="finhub-empty">No invoices yet for this job.</div>'; return; }
+  el.innerHTML = invs.map(inv => {
+    const bal = (inv.total||0) - (inv.amtPaid||0);
+    let status = inv.status || 'Draft';
+    if (status !== 'Paid' && inv.dueDate && inv.dueDate < today) status = 'Overdue';
+    const color = FH_INV_COLORS[status] || '#8ea3c8';
+    return `<div class="finhub-line" onclick="openEditInvoice('${inv.jobId||conCurrentJobId}','${inv.id}')" style="cursor:pointer">
+      <div><div class="finhub-line-title">${esc(inv.number||'Draft')}</div><div class="finhub-line-sub">${esc(inv.type||'Invoice')} · ${inv.date||'—'}${inv.dueDate?` · due ${inv.dueDate}`:''}</div></div>
+      <div class="finhub-line-amt">${fhMoney(inv.total)}</div>
+      <div class="finhub-line-bal" style="color:${bal>0?'#fde68a':'#a3f2d2'}">${bal>0?fhMoney(bal)+' due':'paid'}</div>
+      <div>${fhBadge(status,color)}</div>
+    </div>`;
+  }).join('');
+}
+
+function fhRenderCOs() {
+  const el = document.getElementById('fhCOSec');
+  const cnt = document.getElementById('fhCOCount');
+  const sum = document.getElementById('fhCOSum');
+  if (!el) return;
+  const cos = Array.isArray(conCOs) ? conCOs : [];
+  const approved = cos.filter(c=>c.status==='Approved').reduce((s,c)=>s+Number(c.amount||0),0);
+  const pending = cos.filter(c=>c.status==='Pending').reduce((s,c)=>s+Number(c.amount||0),0);
+  if (cnt) cnt.textContent = cos.length;
+  if (sum) sum.textContent = cos.length ? `+${fhMoney(approved)} approved${pending?` · ${fhMoney(pending)} pending`:''}` : '';
+  if (!cos.length) { el.innerHTML = '<div class="finhub-empty">No change orders.</div>'; return; }
+  el.innerHTML = cos.map(co => {
+    const amt = Number(co.amount||0);
+    const color = FH_CO_COLORS[co.status] || '#8ea3c8';
+    return `<div class="finhub-line" onclick="switchDetailTab('changeorders',null)" style="cursor:pointer">
+      <div><div class="finhub-line-title">${esc(co.title||'Untitled CO')}</div><div class="finhub-line-sub">${co.date||'—'}${co.days?` · +${co.days}d`:''}</div></div>
+      <div class="finhub-line-amt" style="color:${amt>=0?'var(--amber)':'#ef5350'}">${amt>=0?'+':''}${fhMoney(Math.abs(amt))}</div>
+      <div></div>
+      <div>${fhBadge(co.status,color)}</div>
+    </div>`;
+  }).join('');
+}
+
+function fhRenderBillsLoading() {
+  const el = document.getElementById('fhBillSec');
+  if (el) el.innerHTML = '<div class="finhub-empty">Loading bills…</div>';
+}
+
+function fhRenderBills() {
+  const el = document.getElementById('fhBillSec');
+  const cnt = document.getElementById('fhBillCount');
+  const sum = document.getElementById('fhBillSum');
+  if (!el) return;
+  const bills = _fhBills.slice().sort((a,b) => (b.billDate||'').localeCompare(a.billDate||''));
+  const total = bills.reduce((s,b)=>s+(b.amount||0),0);
+  const paid = bills.reduce((s,b)=>s+(b.amtPaid||0),0);
+  const owed = total - paid;
+  if (cnt) cnt.textContent = bills.length;
+  if (sum) sum.textContent = bills.length ? `${fhMoney(owed)} owed of ${fhMoney(total)}` : '';
+  const today = new Date().toISOString().split('T')[0];
+  if (!bills.length) { el.innerHTML = '<div class="finhub-empty">No vendor bills tagged to this job.</div>'; return; }
+  el.innerHTML = bills.map(b => {
+    const bal = (b.amount||0) - (b.amtPaid||0);
+    let status = b.status || 'Unpaid';
+    if (status !== 'Paid' && b.dueDate && b.dueDate < today) status = 'Overdue';
+    const color = FH_BILL_COLORS[status] || '#f59e0b';
+    return `<div class="finhub-line" onclick="openVendorFromBill('${esc(b.vendorId)}','${b.id}')" style="cursor:pointer">
+      <div><div class="finhub-line-title">${esc(b.vendorName||'Vendor')}</div><div class="finhub-line-sub">${esc(b.desc||'')}${b.dueDate?` · due ${b.dueDate}`:''}</div></div>
+      <div class="finhub-line-amt">${fhMoney(b.amount)}</div>
+      <div class="finhub-line-bal" style="color:${bal>0?'#fca5a5':'#a3f2d2'}">${bal>0?fhMoney(bal)+' owed':'paid'}</div>
+      <div>${fhBadge(status,color)}</div>
+    </div>`;
+  }).join('');
+}
+
+function openVendorFromBill(vendorId, billId) {
+  // Best-effort: jump to vendor detail if available, else no-op
+  if (typeof openVendorDetail === 'function' && vendorId) { openVendorDetail(vendorId); }
+}
+
+function fhRenderEva() {
+  const sum = document.getElementById('fhEvaSum');
+  const job = conJobs.find(j => j.id === conCurrentJobId);
+  if (sum && job) {
+    const ec = job.estCost||0, ac = job.actualCost||0;
+    sum.textContent = ac ? `${fhMoney(ac)} actual of ${fhMoney(ec)} est` : `${fhMoney(ec)} est`;
+  }
+}
+
+function fhRenderTotals(job) {
+  const contract = getJobValue(job);
+  const approvedCO = (Array.isArray(conCOs)?conCOs:[]).filter(c=>c.status==='Approved').reduce((s,c)=>s+Number(c.amount||0),0);
+  const contractTotal = contract + approvedCO;
+  const invoiced = _fhInvoices.reduce((s,i)=>s+(i.total||0),0);
+  const collected = _fhInvoices.reduce((s,i)=>s+(i.amtPaid||0),0);
+  const owedUs = invoiced - collected;
+  const billsTotal = _fhBills.reduce((s,b)=>s+(b.amount||0),0);
+  const billsPaid = _fhBills.reduce((s,b)=>s+(b.amtPaid||0),0);
+  const weOwe = billsTotal - billsPaid;
+  const ec = job.estCost||0, ac = job.actualCost||0;
+  const costToComplete = Math.max(ec - ac, 0);
+  const net = collected - billsPaid;
+
+  const set = (id,v,color) => { const el=document.getElementById(id); if(el){ el.textContent=fhMoney(v); if(color)el.style.color=color; } };
+  set('fhContract', contractTotal);
+  set('fhInvoiced', invoiced);
+  set('fhCollected', collected, '#a3f2d2');
+  set('fhOwedUs', owedUs, owedUs>0?'#fde68a':'#a3f2d2');
+  set('fhBills', billsTotal);
+  set('fhBillsPaid', billsPaid, '#a3f2d2');
+  set('fhWeOwe', weOwe, weOwe>0?'#fca5a5':'#a3f2d2');
+  set('fhCostComplete', costToComplete);
+
+  const netEl = document.getElementById('fhNet');
+  if (netEl) { netEl.textContent = (net<0?'-':'')+fhMoney(Math.abs(net)); netEl.style.color = net>=0?'#a3f2d2':'#fca5a5'; }
+  const netSub = document.getElementById('fhNetSub');
+  if (netSub) netSub.textContent = `${fhMoney(owedUs)} still coming in · ${fhMoney(weOwe)} still going out`;
 }
 
 
@@ -1722,6 +1905,9 @@ window.saveLog = saveLog;
 window.deleteLog = deleteLog;
 window.switchConTab = switchConTab;
 window.switchDetailTab = switchDetailTab;
+window.finhubToggle = finhubToggle;
+window.renderFinancialsHub = renderFinancialsHub;
+window.openVendorFromBill = openVendorFromBill;
 
 // ════════════════════════════════════════════════════
 // ── PHASE 2: LINE ITEM ESTIMATING ──

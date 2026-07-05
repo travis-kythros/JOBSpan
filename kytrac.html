@@ -621,6 +621,41 @@
     .bill-row { display:grid; grid-template-columns:1.5fr 1fr 80px 90px 90px 90px; gap:8px; align-items:center; padding:8px 0; border-bottom:1px solid rgba(110,145,210,.07); font-size:.83rem; }
     .bill-header { font-size:.71rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); padding-bottom:7px; border-bottom:2px solid rgba(110,145,210,.12); }
 
+    /* ── Financial Hub ── */
+    .finhub-cash { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+    .finhub-cash-col { border-radius:14px; padding:14px 16px; border:1px solid rgba(110,145,210,.14); }
+    .finhub-cash-in { background:linear-gradient(150deg,rgba(29,187,135,.10),rgba(29,187,135,.02)); border-color:rgba(29,187,135,.22); }
+    .finhub-cash-out { background:linear-gradient(150deg,rgba(239,83,80,.09),rgba(239,83,80,.02)); border-color:rgba(239,83,80,.20); }
+    .finhub-cash-head { font-size:.82rem; font-weight:800; margin-bottom:10px; }
+    .finhub-cash-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; font-size:.84rem; }
+    .finhub-cash-row span { color:var(--muted); }
+    .finhub-cash-row b { font-weight:700; }
+    .finhub-cash-hot { border-top:1px solid rgba(110,145,210,.14); margin-top:4px; padding-top:8px; }
+    .finhub-cash-hot span { color:#eaf0fb; font-weight:600; }
+    .finhub-cash-hot b { font-size:1.02rem; }
+    .finhub-net { display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-radius:14px; background:rgba(6,14,28,.6); border:1px solid rgba(110,145,210,.16); margin-bottom:18px; }
+    .finhub-net-label { font-size:.74rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
+    .finhub-net-sub { font-size:.78rem; color:var(--muted); margin-top:3px; }
+    .finhub-net-val { font-size:1.5rem; font-weight:900; }
+    .finhub-sec { border:1px solid rgba(110,145,210,.12); border-radius:12px; margin-bottom:10px; overflow:clip; }
+    .finhub-sec-head { display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; user-select:none; background:rgba(110,145,210,.04); }
+    .finhub-sec-head:hover { background:rgba(110,145,210,.07); }
+    .finhub-sec-head > span:first-child { font-weight:800; font-size:.9rem; }
+    .finhub-count { display:inline-block; min-width:20px; text-align:center; font-size:.72rem; font-weight:700; color:var(--muted); background:rgba(110,145,210,.14); border-radius:10px; padding:1px 7px; margin-left:4px; }
+    .finhub-sec-sum { margin-left:auto; font-size:.8rem; color:var(--muted); font-weight:600; }
+    .finhub-chev { font-size:.8rem; color:var(--muted); transition:transform .2s; }
+    .finhub-chev.closed { transform:rotate(-90deg); }
+    .finhub-sec-body { padding:10px 14px; }
+    .finhub-line { display:grid; grid-template-columns:1fr auto auto auto; gap:12px; align-items:center; padding:9px 0; border-bottom:1px solid rgba(110,145,210,.07); font-size:.84rem; }
+    .finhub-line:last-child { border-bottom:none; }
+    .finhub-line-title { font-weight:700; }
+    .finhub-line-sub { font-size:.74rem; color:var(--muted); }
+    .finhub-line-amt { text-align:right; font-weight:700; white-space:nowrap; }
+    .finhub-line-bal { text-align:right; font-weight:700; white-space:nowrap; }
+    .finhub-badge { font-size:.68rem; font-weight:800; padding:2px 9px; border-radius:20px; white-space:nowrap; }
+    .finhub-empty { color:var(--muted); font-style:italic; font-size:.84rem; padding:8px 0; }
+    @media (max-width:640px){ .finhub-cash { grid-template-columns:1fr; } }
+
     /* ══ DOCUMENTS ══ */
     .doc-card { background:rgba(8,18,36,.75); border:1px solid var(--amber-border); border-radius:11px; padding:12px 14px; margin-bottom:8px; display:flex; align-items:center; gap:12px; cursor:pointer; transition:border-color .12s; }
     .doc-card:hover { border-color:var(--amber); }
@@ -885,7 +920,7 @@
     <div class="kt-logo">
       <div class="kt-logo-mark">⚡ KYTRAC</div>
       <div class="kt-logo-tag" id="ktCompanyTag">7 Pillars Contracting</div>
-      <div class="kt-logo-version" id="ktVersionTag">Version 1.9.1 · 05/Jul/2026</div>
+      <div class="kt-logo-version" id="ktVersionTag">Version 1.9.2 · 05/Jul/2026</div>
     </div>
 
     <nav class="kt-nav">
@@ -3183,20 +3218,87 @@
 
       <!-- FINANCIALS TAB -->
       <div id="detailFinancials" style="display:none">
-        <div class="fin-row"><span class="fin-label">Contract Value</span><span class="fin-val" id="finContract" style="color:#a3f2d2"></span></div>
-        <div class="fin-row"><span class="fin-label">Estimated Cost</span><span class="fin-val" id="finEstCost"></span></div>
-        <div class="fin-row"><span class="fin-label">Estimated Gross Profit</span><span class="fin-val" id="finEstProfit" style="color:#a3f2d2"></span></div>
-        <div class="fin-row"><span class="fin-label">Estimated Margin</span><span class="fin-val" id="finEstMargin"></span></div>
-        <div class="margin-bar"><div class="margin-fill" id="finMarginBar" style="width:0%"></div></div>
-        <div style="margin-top:16px">
-          <div style="font-weight:700;margin-bottom:8px">Actual Cost to Date</div>
-          <div style="display:flex;gap:8px;margin-bottom:8px">
-            <input id="actualCostInput" type="number" step="0.01" placeholder="Enter actual cost to date" style="flex:1" />
-            <button class="btn-amber" onclick="saveActualCost()" style="padding:8px 16px;font-size:.84rem">Update</button>
+
+        <!-- ══ CASH POSITION ══ -->
+        <div class="finhub-cash">
+          <div class="finhub-cash-col finhub-cash-in">
+            <div class="finhub-cash-head">💵 Money In</div>
+            <div class="finhub-cash-row"><span>Contract + Approved COs</span><b id="fhContract">—</b></div>
+            <div class="finhub-cash-row"><span>Invoiced to Customer</span><b id="fhInvoiced">—</b></div>
+            <div class="finhub-cash-row"><span>Collected</span><b id="fhCollected" style="color:#a3f2d2">—</b></div>
+            <div class="finhub-cash-row finhub-cash-hot"><span>Owed to Us</span><b id="fhOwedUs" style="color:#fde68a">—</b></div>
           </div>
-          <div class="fin-row"><span class="fin-label">Actual Cost</span><span class="fin-val" id="finActualCost"></span></div>
-          <div class="fin-row"><span class="fin-label">Variance (Est vs Actual)</span><span class="fin-val" id="finVariance"></span></div>
+          <div class="finhub-cash-col finhub-cash-out">
+            <div class="finhub-cash-head">🧾 Money Out</div>
+            <div class="finhub-cash-row"><span>Vendor Bills</span><b id="fhBills">—</b></div>
+            <div class="finhub-cash-row"><span>Bills Paid</span><b id="fhBillsPaid" style="color:#a3f2d2">—</b></div>
+            <div class="finhub-cash-row finhub-cash-hot"><span>We Owe (AP)</span><b id="fhWeOwe" style="color:#fca5a5">—</b></div>
+            <div class="finhub-cash-row"><span>Est. Cost to Complete</span><b id="fhCostComplete">—</b></div>
+          </div>
         </div>
+        <div class="finhub-net" id="fhNetBox">
+          <div>
+            <div class="finhub-net-label">Net Cash Position (Collected − Bills Paid)</div>
+            <div class="finhub-net-sub" id="fhNetSub">—</div>
+          </div>
+          <div class="finhub-net-val" id="fhNet">—</div>
+        </div>
+
+        <!-- ══ CUSTOMER INVOICES ══ -->
+        <div class="finhub-sec">
+          <div class="finhub-sec-head" onclick="finhubToggle('fhInvSec',this)">
+            <span>🧾 Customer Invoices <span class="finhub-count" id="fhInvCount">0</span></span>
+            <span class="finhub-sec-sum" id="fhInvSum"></span>
+            <span class="finhub-chev">▾</span>
+          </div>
+          <div class="finhub-sec-body" id="fhInvSec"></div>
+        </div>
+
+        <!-- ══ CHANGE ORDERS ══ -->
+        <div class="finhub-sec">
+          <div class="finhub-sec-head" onclick="finhubToggle('fhCOSec',this)">
+            <span>🔄 Change Orders <span class="finhub-count" id="fhCOCount">0</span></span>
+            <span class="finhub-sec-sum" id="fhCOSum"></span>
+            <span class="finhub-chev">▾</span>
+          </div>
+          <div class="finhub-sec-body" id="fhCOSec"></div>
+        </div>
+
+        <!-- ══ VENDOR BILLS (AP) ══ -->
+        <div class="finhub-sec">
+          <div class="finhub-sec-head" onclick="finhubToggle('fhBillSec',this)">
+            <span>👷 Vendor Bills <span class="finhub-count" id="fhBillCount">0</span></span>
+            <span class="finhub-sec-sum" id="fhBillSum"></span>
+            <span class="finhub-chev">▾</span>
+          </div>
+          <div class="finhub-sec-body" id="fhBillSec"></div>
+        </div>
+
+        <!-- ══ EST vs ACTUAL ══ -->
+        <div class="finhub-sec">
+          <div class="finhub-sec-head" onclick="finhubToggle('fhEvaSec',this)">
+            <span>📊 Estimate vs Actual</span>
+            <span class="finhub-sec-sum" id="fhEvaSum"></span>
+            <span class="finhub-chev">▾</span>
+          </div>
+          <div class="finhub-sec-body" id="fhEvaSec" style="display:none">
+            <div class="fin-row"><span class="fin-label">Contract Value</span><span class="fin-val" id="finContract" style="color:#a3f2d2"></span></div>
+            <div class="fin-row"><span class="fin-label">Estimated Cost</span><span class="fin-val" id="finEstCost"></span></div>
+            <div class="fin-row"><span class="fin-label">Estimated Gross Profit</span><span class="fin-val" id="finEstProfit" style="color:#a3f2d2"></span></div>
+            <div class="fin-row"><span class="fin-label">Estimated Margin</span><span class="fin-val" id="finEstMargin"></span></div>
+            <div class="margin-bar"><div class="margin-fill" id="finMarginBar" style="width:0%"></div></div>
+            <div style="margin-top:16px">
+              <div style="font-weight:700;margin-bottom:8px">Actual Cost to Date</div>
+              <div style="display:flex;gap:8px;margin-bottom:8px">
+                <input id="actualCostInput" type="number" step="0.01" placeholder="Enter actual cost to date" style="flex:1" />
+                <button class="btn-amber" onclick="saveActualCost()" style="padding:8px 16px;font-size:.84rem">Update</button>
+              </div>
+              <div class="fin-row"><span class="fin-label">Actual Cost</span><span class="fin-val" id="finActualCost"></span></div>
+              <div class="fin-row"><span class="fin-label">Variance (Est vs Actual)</span><span class="fin-val" id="finVariance"></span></div>
+            </div>
+          </div>
+        </div>
+
       </div>
 
       <!-- ESTIMATE TAB -->
