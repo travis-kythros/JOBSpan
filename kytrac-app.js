@@ -1,4 +1,4 @@
-// KYTRAC Application JavaScript v1.9.6 · 05/Jul/2026
+// KYTRAC Application JavaScript v1.9.8 · 05/Jul/2026
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -754,10 +754,42 @@ function detectImportType(headers) {
   const h = headers.map(x => x.toLowerCase());
   const has = (...cols) => cols.every(c => h.includes(c));
   if (has('document name') && h.includes('amount') && h.includes('source')) return 'payments';
-  if (has('document','total') && h.includes('subtotal')) return 'invoices';
+  // Invoices carry State/City/County; Orders do not — that's the clean discriminator.
+  if (has('document','total','subtotal') && h.includes('city') && h.includes('county')) return 'invoices';
+  if (has('document','total','subtotal') && h.includes('close message') && !h.includes('city')) return 'orders';
   if (has('document','ext price') && h.includes('job')) return 'costitems';
+  if (has('document','vendor') && h.includes('total')) return 'vendorbills';
+  if (has('hours (decimal)','job') && h.includes('user')) return 'timeentries';
   return null;
 }
+
+// Burdened hourly rates (Standard / Overtime) from JobTread team rate cards.
+// Editable later via Settings; missing people fall back to LABOR_DEFAULT_RATE.
+const LABOR_DEFAULT_RATE = 36.91; // blended, derived from JobTread ground truth
+let LABOR_RATES = {
+  'Gonzalo Domingo': { std: 40.42, ot: 60.63 },
+  'Shane Martin':    { std: 45.07, ot: 67.61 },
+  'Jason Hudson':    { std: 51.80, ot: 77.70 },
+  'Eric Leezy':      { std: 37.90, ot: 56.84 },
+  'Kam Bradley':     { std: 37.90, ot: 56.84 },
+  'Lucas Martin':    { std: 34.36, ot: 51.55 },
+  'Troy Miller':     { std: 49.15, ot: 73.73 },
+  'Dave Howell':     { std: 31.70, ot: 47.56 },
+  // Field techs — burdened rates derived from JobTread labor totals (no rate card on file).
+  // Ordering per Travis: Mike Morris paid above Rosalio/Francisco; Tyler treated as base tech.
+  'Rosalio Tomas':   { std: 22.00, ot: 33.00, derived: true },
+  'Francisco Tomas': { std: 22.00, ot: 33.00, derived: true },
+  'Tyler Rallo':     { std: 22.00, ot: 33.00, derived: true },
+  'Mike Morris':     { std: 26.00, ot: 39.00, derived: true }
+};
+
+function laborRateFor(user, type) {
+  const card = LABOR_RATES[user];
+  const isOT = (type||'').toLowerCase().startsWith('over');
+  if (!card) return { rate: LABOR_DEFAULT_RATE, estimated: true };
+  return { rate: isOT ? (card.ot || card.std) : card.std, estimated: !!card.derived };
+}
+
 
 let _pendingImport = null;
 
@@ -768,9 +800,18 @@ async function handleImportFiles(fileList) {
   out.innerHTML = '<div class="small muted">Reading ' + files.length + ' file(s)…</div>';
 
   const collected = {};   // jobNum -> total paid
-  const invoicedByFile = { invoices:{}, costitems:{} }; // keep sources separate to avoid double count
+  const invoicedByFile = { invoices:{}, costitems:{} };
+  const approved = {};    // jobNum -> approved contract (orders)
+  const billCost = {};    // jobNum -> vendor bill cost (non-void)
+  const laborCost = {};   // jobNum -> labor cost from time entries
+  const laborEstimated = {}; // jobNum -> true if any hours used a fallback rate
   const seen = [];
   const unknownFiles = [];
+
+  // Job number from a document string like "Proposal 1065-1", "Expense 1065-6", "Order 1065-1"
+  const jobNumFromDoc = s => { const m = String(s||'').match(/(\d+)\s*-\s*\d+/); return m ? m[1] : null; };
+  // Job number from Time Entries "Job" column like "1065-30474Highway161-Rehab"
+  const jobNumFromJobCol = s => { const m = String(s||'').match(/^\s*(\d+)/); return m ? m[1] : null; };
 
   for (const file of files) {
     let text;
@@ -780,22 +821,38 @@ async function handleImportFiles(fileList) {
     const type = detectImportType(Object.keys(objs[0]));
     if (!type) { unknownFiles.push(file.name + ' (unrecognized headers)'); continue; }
 
-    // Only count invoices that were actually issued — exclude Draft (never sent) and Void (cancelled).
     const countsAsInvoiced = st => { const s = (st||'').toLowerCase(); return s !== 'draft' && s !== 'void' && s !== 'canceled' && s !== 'cancelled'; };
+
     if (type === 'payments') {
       objs.forEach(o => { const jn = jobNumFromInvoice(o['Document Name']); if (jn) collected[jn] = (collected[jn]||0) + num(o['Amount']); });
     } else if (type === 'invoices') {
-      objs.forEach(o => { if (!countsAsInvoiced(o['Status'])) return; const jn = jobNumFromInvoice(o['Document']); if (jn) invoicedByFile.invoices[jn] = (invoicedByFile.invoices[jn]||0) + num(o['Total']); });
+      objs.forEach(o => { if (!countsAsInvoiced(o['Status'])) return; const jn = jobNumFromDoc(o['Document']); if (jn) invoicedByFile.invoices[jn] = (invoicedByFile.invoices[jn]||0) + num(o['Total']); });
     } else if (type === 'costitems') {
-      objs.forEach(o => { if (!countsAsInvoiced(o['Status'])) return; const jn = jobNumFromInvoice(o['Document']); if (jn) invoicedByFile.costitems[jn] = (invoicedByFile.costitems[jn]||0) + num(o['Ext Price']); });
+      objs.forEach(o => { if (!countsAsInvoiced(o['Status'])) return; const jn = jobNumFromDoc(o['Document']); if (jn) invoicedByFile.costitems[jn] = (invoicedByFile.costitems[jn]||0) + num(o['Ext Price']); });
+    } else if (type === 'orders') {
+      // Approved Price = sum of Approved orders (base proposal + approved change orders)
+      objs.forEach(o => { if ((o['Status']||'') !== 'Approved') return; const jn = jobNumFromDoc(o['Document']); if (jn) approved[jn] = (approved[jn]||0) + num(o['Total']); });
+    } else if (type === 'vendorbills') {
+      objs.forEach(o => { if ((o['Status']||'') === 'Void') return; const jn = jobNumFromDoc(o['Document']); if (jn) billCost[jn] = (billCost[jn]||0) + num(o['Total']); });
+    } else if (type === 'timeentries') {
+      // Labor cost = hours × per-person burdened rate (Standard/Overtime). Never reads name/email as identity beyond rate lookup.
+      objs.forEach(o => {
+        const jn = jobNumFromJobCol(o['Job']); if (!jn) return;
+        const hrs = num(o['Hours (Decimal)']); if (!hrs) return;
+        const { rate, estimated } = laborRateFor((o['User']||'').trim(), o['Type']);
+        laborCost[jn] = (laborCost[jn]||0) + hrs * rate;
+        if (estimated) laborEstimated[jn] = true;
+      });
     }
     seen.push({ name: file.name, type, rows: objs.length });
   }
 
-  // Invoiced: prefer the invoices export; fall back to cost-items only for jobs not covered by invoices
   const invoiced = { ...invoicedByFile.costitems, ...invoicedByFile.invoices };
 
-  const allJobNums = new Set([...Object.keys(collected), ...Object.keys(invoiced)]);
+  const allJobNums = new Set([
+    ...Object.keys(collected), ...Object.keys(invoiced),
+    ...Object.keys(approved), ...Object.keys(billCost), ...Object.keys(laborCost)
+  ]);
   const updates = [];
   const unmatched = [];
   allJobNums.forEach(jn => {
@@ -804,29 +861,72 @@ async function handleImportFiles(fileList) {
     const u = { job, jobNum: jn };
     if (collected[jn] !== undefined) u.collected = Math.round(collected[jn]*100)/100;
     if (invoiced[jn] !== undefined) u.invoiced = Math.round(invoiced[jn]*100)/100;
+    if (approved[jn] !== undefined) u.approvedPrice = Math.round(approved[jn]*100)/100;
+    // Actual cost = vendor bills + labor (either may be absent)
+    const bc = billCost[jn], lc = laborCost[jn];
+    if (bc !== undefined || lc !== undefined) {
+      u.billCost = bc !== undefined ? Math.round(bc*100)/100 : undefined;
+      u.laborCost = lc !== undefined ? Math.round(lc*100)/100 : undefined;
+      u.actualCost = Math.round(((bc||0) + (lc||0))*100)/100;
+      if (laborEstimated[jn]) u.laborEstimated = true;
+    }
     updates.push(u);
   });
   updates.sort((a,b) => Number(a.jobNum) - Number(b.jobNum));
 
   _pendingImport = updates;
+  const fmtM = v => v===undefined?'—':'$'+Math.round(v).toLocaleString();
+
+  // Portfolio roll-up (better than JobTread: see the whole book at once)
+  let portApproved=0, portCost=0, portJobs=0, negJobs=[];
+  updates.forEach(u => {
+    if (u.approvedPrice!==undefined && u.actualCost!==undefined) {
+      portApproved += u.approvedPrice; portCost += u.actualCost; portJobs++;
+      const m = u.approvedPrice>0 ? (u.approvedPrice-u.actualCost)/u.approvedPrice*100 : 0;
+      if (m < 0) negJobs.push({ jn:u.jobNum, m });
+    }
+  });
+  const portMargin = portApproved>0 ? (portApproved-portCost)/portApproved*100 : 0;
+
   let html = '<div style="border:1px solid var(--line);border-radius:10px;padding:14px">';
   html += '<div style="font-weight:800;margin-bottom:8px">Import preview</div>';
   seen.forEach(s => { html += '<div class="small" style="color:#a3f2d2">✓ ' + esc(s.name) + ' — ' + s.type + ' (' + s.rows + ' rows)</div>'; });
   unknownFiles.forEach(u => { html += '<div class="small" style="color:#fca5a5">✗ ' + esc(u) + '</div>'; });
   html += '<div style="height:1px;background:var(--line);margin:10px 0"></div>';
+
+  // Portfolio card
+  if (portJobs > 0) {
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:12px">'
+      + '<div class="kt-card" style="padding:10px 12px"><div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;font-weight:700">Portfolio Approved</div><div style="font-size:1.1rem;font-weight:900;color:#a3f2d2">'+fmtM(portApproved)+'</div></div>'
+      + '<div class="kt-card" style="padding:10px 12px"><div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;font-weight:700">Portfolio Cost</div><div style="font-size:1.1rem;font-weight:900">'+fmtM(portCost)+'</div></div>'
+      + '<div class="kt-card" style="padding:10px 12px"><div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;font-weight:700">Blended Margin</div><div style="font-size:1.1rem;font-weight:900;color:'+(portMargin>=0?'#a3f2d2':'#fca5a5')+'">'+portMargin.toFixed(1)+'%</div></div>'
+      + '<div class="kt-card" style="padding:10px 12px"><div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;font-weight:700">Jobs Underwater</div><div style="font-size:1.1rem;font-weight:900;color:'+(negJobs.length?'#fca5a5':'#a3f2d2')+'">'+negJobs.length+'</div></div>'
+      + '</div>';
+    if (negJobs.length) {
+      negJobs.sort((a,b)=>a.m-b.m);
+      html += '<div style="font-size:.74rem;color:#fca5a5;margin-bottom:10px">⚠ Negative-margin jobs: '
+        + negJobs.slice(0,15).map(n=>'#'+n.jn+' ('+n.m.toFixed(0)+'%)').join(', ') + (negJobs.length>15?'…':'') + '</div>';
+    }
+  }
+
   html += '<div class="small muted" style="margin-bottom:8px">' + updates.length + ' job(s) matched'
         + (unmatched.length ? ' · ' + unmatched.length + ' unmatched job #: ' + unmatched.slice(0,12).join(', ') + (unmatched.length>12?'…':'') : '') + '</div>';
 
   if (updates.length) {
-    html += '<div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px">';
-    html += '<div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;padding:7px 10px;font-size:.72rem;font-weight:700;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line)"><span>Job #</span><span style="text-align:right">Collected</span><span style="text-align:right">Invoiced</span></div>';
+    html += '<div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px">';
+    html += '<div style="display:grid;grid-template-columns:60px 1fr 1fr 1fr 1fr;gap:6px;padding:7px 10px;font-size:.68rem;font-weight:700;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line)"><span>Job#</span><span style="text-align:right">Approved</span><span style="text-align:right">Cost</span><span style="text-align:right">Collected</span><span style="text-align:right">Margin</span></div>';
     updates.slice(0,300).forEach(u => {
-      html += '<div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;padding:6px 10px;font-size:.82rem;border-bottom:1px solid rgba(110,145,210,.06)">'
-            + '<span style="color:var(--amber);font-weight:700">' + esc(u.jobNum) + '</span>'
-            + '<span style="text-align:right">' + (u.collected!==undefined?'$'+u.collected.toLocaleString():'—') + '</span>'
-            + '<span style="text-align:right">' + (u.invoiced!==undefined?'$'+u.invoiced.toLocaleString():'—') + '</span></div>';
+      const m = (u.approvedPrice!==undefined && u.actualCost!==undefined && u.approvedPrice>0)
+        ? (u.approvedPrice-u.actualCost)/u.approvedPrice*100 : null;
+      html += '<div style="display:grid;grid-template-columns:60px 1fr 1fr 1fr 1fr;gap:6px;padding:6px 10px;font-size:.8rem;border-bottom:1px solid rgba(110,145,210,.06)">'
+            + '<span style="color:var(--amber);font-weight:700">' + esc(u.jobNum) + (u.laborEstimated?' <span title="labor partially estimated" style="color:#f59e0b">~</span>':'') + '</span>'
+            + '<span style="text-align:right">' + fmtM(u.approvedPrice) + '</span>'
+            + '<span style="text-align:right">' + fmtM(u.actualCost) + '</span>'
+            + '<span style="text-align:right">' + fmtM(u.collected) + '</span>'
+            + '<span style="text-align:right;font-weight:700;color:'+(m===null?'var(--muted)':(m>=0?'#a3f2d2':'#fca5a5'))+'">' + (m===null?'—':m.toFixed(1)+'%') + '</span></div>';
     });
     html += '</div>';
+    html += '<div style="font-size:.68rem;color:var(--muted);margin-top:6px">~ = labor cost partially estimated (missing rate card)</div>';
     html += '<div style="margin-top:12px"><button class="btn-amber" onclick="commitImport()" style="padding:9px 18px;font-weight:700">✓ Apply to ' + updates.length + ' job(s)</button>'
           + '<button class="btn" onclick="document.getElementById(\'importResult\').innerHTML=\'\';_pendingImport=null" style="margin-left:8px;padding:9px 18px">Cancel</button></div>';
   } else {
@@ -847,10 +947,22 @@ async function commitImport() {
     const patch = { financialsSyncedAt: firebase.firestore.FieldValue.serverTimestamp() };
     if (u.collected !== undefined) patch.collected = u.collected;
     if (u.invoiced !== undefined) patch.invoiced = u.invoiced;
+    if (u.approvedPrice !== undefined) patch.contractValue = u.approvedPrice;
+    if (u.actualCost !== undefined) patch.actualCost = u.actualCost;
+    if (u.laborCost !== undefined) patch.laborCost = u.laborCost;
+    if (u.billCost !== undefined) patch.billCost = u.billCost;
+    if (u.laborEstimated) patch.laborEstimated = true;
     try {
       await coll('jobs').doc(u.job.id).update(patch);
       const j = conJobs.find(x => x.id === u.job.id);
-      if (j) { if (u.collected!==undefined) j.collected = u.collected; if (u.invoiced!==undefined) j.invoiced = u.invoiced; }
+      if (j) {
+        if (u.collected!==undefined) j.collected = u.collected;
+        if (u.invoiced!==undefined) j.invoiced = u.invoiced;
+        if (u.approvedPrice!==undefined) j.contractValue = u.approvedPrice;
+        if (u.actualCost!==undefined) j.actualCost = u.actualCost;
+        if (u.laborCost!==undefined) j.laborCost = u.laborCost;
+        if (u.billCost!==undefined) j.billCost = u.billCost;
+      }
       done++;
     } catch(e) { failed++; }
     if (out && done % 5 === 0) out.innerHTML = '<div class="small muted">Applying… ' + done + '/' + total + '</div>';
