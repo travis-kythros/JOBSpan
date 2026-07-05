@@ -517,7 +517,7 @@ function openNewJobModal() {
   kOpen('newJobModal');
 }
 
-function saveJob() {
+function saveJob(openEstimate) {
   const name = document.getElementById('jobName').value.trim();
   const client = document.getElementById('jobClient').value.trim();
   if (!name || !client) { alert('Job name and client name are required.'); return; }
@@ -551,11 +551,60 @@ function saveJob() {
     data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
     data.createdBy = conCurrentUser ? conCurrentUser.email : 'unknown';
     data.actualCost = 0;
-    coll('jobs').add(data)
-      .then(() => kClose('newJobModal'))
+    coll('jobs').add(subDoc(data))
+      .then(ref => {
+        kClose('newJobModal');
+        // Auto-open job detail to estimate tab
+        setTimeout(() => {
+          const tabToOpen = openEstimate ? 'estimate' : 'dashboard';
+          openJobDetail(ref.id);
+          setTimeout(() => {
+            const tabBtn = document.querySelector('#jobDetailModal .con-subtab');
+            if (openEstimate) {
+              // Click the Estimate tab
+              document.querySelectorAll('#jobDetailModal .con-subtab').forEach(btn => {
+                if (btn.textContent.includes('Estimate')) btn.click();
+              });
+            }
+          }, 400);
+        }, 300);
+      })
       .catch(e => alert('Error saving: ' + e.message));
   }
 }
+
+function openNewJobForCustomer(customerId) {
+  const customer = allCustomers.find(c => c.id === customerId);
+  if (!customer) return;
+  conEditingJobId = null;
+  document.getElementById('jobModalTitle').textContent = 'New Job';
+  // Pre-fill from customer
+  document.getElementById('jobName').value = customer.name + ' — ';
+  document.getElementById('jobClient').value = customer.name;
+  document.getElementById('jobPhone').value = customer.phone || '';
+  document.getElementById('jobEmail').value = customer.email || '';
+  document.getElementById('jobAddress').value = customer.address || '';
+  document.getElementById('jobStatus').value = 'Contracted';
+  document.getElementById('jobType').value = 'Residential Remodel';
+  document.getElementById('jobContractValue').value = '';
+  document.getElementById('jobEstCost').value = '';
+  document.getElementById('jobStartDate').value = '';
+  document.getElementById('jobEndDate').value = '';
+  document.getElementById('jobNotes').value = '';
+  const superEl = document.getElementById('jobSuperintendent');
+  const pmEl = document.getElementById('jobPM');
+  if (superEl) superEl.innerHTML = getTeamMemberOpts();
+  if (pmEl) pmEl.innerHTML = getTeamMemberOpts();
+  // Switch to Jobs page and open modal
+  ktNav('jobs', null);
+  kOpen('newJobModal');
+  // Focus on job name so user can type the job description
+  setTimeout(() => {
+    const nameEl = document.getElementById('jobName');
+    if (nameEl) { nameEl.focus(); nameEl.setSelectionRange(nameEl.value.length, nameEl.value.length); }
+  }, 200);
+}
+window.openNewJobForCustomer = openNewJobForCustomer;
 
 function conRenderBoard() {
   const board = document.getElementById('conBoard');
@@ -626,7 +675,7 @@ function conRenderStats() {
   document.getElementById('statActiveJobs').textContent = active;
   const totalContract = conJobs.reduce((s, j) => s + getJobValue(j), 0);
   document.getElementById('statContractTotal').textContent = '$' + Math.round(totalContract).toLocaleString();
-  const margins = conJobs.filter(j => getJobValue(j) && j.estCost).map(j => (getJobValue(j) - j.estCost) / getJobValue(j) * 100);
+  const margins = conJobs.filter(j => getJobValue(j) > 0 && j.estCost > 0 && j.estCost < getJobValue(j)).map(j => (getJobValue(j) - j.estCost) / getJobValue(j) * 100);
   const avgMargin = margins.length ? (margins.reduce((a,b) => a+b, 0) / margins.length).toFixed(1) : '0';
   document.getElementById('statAvgMargin').textContent = avgMargin + '%';
   const today = new Date().toISOString().split('T')[0];
@@ -1226,14 +1275,14 @@ function renderJCDKpis() {
   const totalActual = jobs.reduce((s,j) => s + getJobTotalActual(j.id), 0);
 
   // Weighted avg margin on jobs with contract value
-  const marginJobs = jobs.filter(j => getJobValue(j) && j.estCost);
+  const marginJobs = jobs.filter(j => getJobValue(j) > 0 && j.estCost > 0 && j.estCost < getJobValue(j));
   const avgEstMargin = marginJobs.length
     ? marginJobs.reduce((s,j) => s + ((getJobValue(j) - j.estCost) / getJobValue(j) * 100), 0) / marginJobs.length
     : 0;
 
   // Jobs with margin < 15% (threshold warning)
   const atRisk = jobs.filter(j => {
-    if (!getJobValue(j) || !j.estCost) return false;
+    if (!getJobValue(j) || !j.estCost || j.estCost >= getJobValue(j)) return false;
     const m = (getJobValue(j) - j.estCost) / getJobValue(j) * 100;
     return m < 15 && ['Work In Progress','Scheduled','Inspection Pending'].includes(j.status);
   }).length;
@@ -4291,29 +4340,44 @@ function renderCustomers() {
   }
 
   grid.innerHTML = customers.map(c => {
-    // Count jobs linked to this customer
-    const jobCount = conJobs.filter(j => j.client === c.name || j.customerId === c.id).length;
+    const customerJobs = conJobs.filter(j => j.client === c.name || j.customerId === c.id);
+    const openJobs = customerJobs.filter(j => !['Closed Won','Closed Lost'].includes(j.status));
+    const jobCount = customerJobs.length;
     const initials = (c.name||'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
-    return `<div class="customer-card" onclick="openCustomerModal('${c.id}')">
-      <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:10px">
-        <div class="customer-avatar">${initials}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:800;font-size:.95rem;color:#eaf0fb">${esc(c.name||'')}</div>
-          <div style="font-size:.75rem;color:var(--muted);margin-top:1px">${esc(c.type||'Homeowner')}</div>
-          ${c.source?`<div style="font-size:.72rem;color:rgba(110,145,210,.4);margin-top:1px">via ${esc(c.source)}</div>`:''}
-        </div>
-        ${jobCount>0?`<span style="background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber-border);border-radius:999px;padding:2px 8px;font-size:.7rem;font-weight:700;white-space:nowrap">${jobCount} job${jobCount!==1?'s':''}</span>`:''}
-      </div>
-      <div style="display:flex;flex-direction:column;gap:4px">
-        ${c.phone?`<div style="font-size:.82rem;display:flex;align-items:center;gap:6px">
-          <a href="tel:${esc(c.phone)}" onclick="event.stopPropagation()" style="color:#a3f2d2;text-decoration:none;font-weight:600">📞 ${esc(c.phone)}</a>
-          <a href="sms:${esc(c.phone)}" onclick="event.stopPropagation()" style="background:rgba(59,130,246,.15);color:#93c5fd;border:1px solid rgba(59,130,246,.25);border-radius:6px;padding:1px 7px;font-size:.7rem;font-weight:700;text-decoration:none">📱 Text</a>
-        </div>`:''}
-        ${c.email?`<div style="font-size:.82rem;display:flex;align-items:center;gap:6px"><span style="color:var(--muted)">✉️</span><a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()" style="color:#eaf0fb;text-decoration:none">${esc(c.email)}</a></div>`:''}
-        ${c.address?`<div style="font-size:.78rem;color:var(--muted);display:flex;align-items:center;gap:6px"><span>📍</span>${esc(c.address)}</div>`:''}
-        ${c.notes?`<div style="font-size:.76rem;color:rgba(110,145,210,.5);margin-top:4px;font-style:italic">${esc(c.notes.slice(0,80))}${c.notes.length>80?'…':''}</div>`:''}
-      </div>
-    </div>`;
+    const jobsHtml = openJobs.slice(0,3).map(j =>
+      '<div onclick="event.stopPropagation();openJobDetail(\'' + j.id + '\')" ' +
+      'style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;background:rgba(217,119,6,.08);border:1px solid rgba(217,119,6,.15);border-radius:7px;margin-bottom:4px;cursor:pointer" ' +
+      'onmouseover="this.style.background=\'rgba(217,119,6,.15)\'" onmouseout="this.style.background=\'rgba(217,119,6,.08)\'">' +
+      '<div><div style="font-size:.8rem;font-weight:700;color:#eaf0fb">' + esc(j.name) + '</div>' +
+      '<div style="font-size:.7rem;color:var(--muted)">#' + (j.jobNumber||'') + ' · ' + esc(j.status) + '</div></div>' +
+      '<div style="font-size:.72rem;color:var(--amber);font-weight:700">→ Open</div></div>'
+    ).join('');
+    return '<div class="customer-card">' +
+      '<div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:10px">' +
+      '<div class="customer-avatar">' + initials + '</div>' +
+      '<div style="flex:1;min-width:0">' +
+      '<div style="font-weight:800;font-size:.95rem;color:#eaf0fb">' + esc(c.name||'') + '</div>' +
+      '<div style="font-size:.75rem;color:var(--muted);margin-top:1px">' + esc(c.type||'Homeowner') + '</div>' +
+      (c.source ? '<div style="font-size:.72rem;color:rgba(110,145,210,.4);margin-top:1px">via ' + esc(c.source) + '</div>' : '') +
+      '</div>' +
+      (jobCount>0 ? '<span style="background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber-border);border-radius:999px;padding:2px 8px;font-size:.7rem;font-weight:700;white-space:nowrap">' + jobCount + ' job' + (jobCount!==1?'s':'') + '</span>' : '') +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:4px">' +
+      (c.phone ? '<div style="font-size:.82rem;display:flex;align-items:center;gap:6px"><a href="tel:' + esc(c.phone) + '" onclick="event.stopPropagation()" style="color:#a3f2d2;text-decoration:none;font-weight:600">📞 ' + esc(c.phone) + '</a><a href="sms:' + esc(c.phone) + '" onclick="event.stopPropagation()" style="background:rgba(59,130,246,.15);color:#93c5fd;border:1px solid rgba(59,130,246,.25);border-radius:6px;padding:1px 7px;font-size:.7rem;font-weight:700;text-decoration:none">📱 Text</a></div>' : '') +
+      (c.email ? '<div style="font-size:.82rem;display:flex;align-items:center;gap:6px"><span style="color:var(--muted)">✉️</span><a href="mailto:' + esc(c.email) + '" onclick="event.stopPropagation()" style="color:#eaf0fb;text-decoration:none">' + esc(c.email) + '</a></div>' : '') +
+      (c.address ? '<div style="font-size:.78rem;color:var(--muted);display:flex;align-items:center;gap:6px"><span>📍</span>' + esc(c.address) + '</div>' : '') +
+      (c.notes ? '<div style="font-size:.76rem;color:rgba(110,145,210,.5);margin-top:4px;font-style:italic">' + esc(c.notes.slice(0,80)) + (c.notes.length>80?'…':'') + '</div>' : '') +
+      '</div>' +
+      (openJobs.length > 0 ?
+        '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(110,145,210,.1)">' +
+        '<div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px">Open Jobs</div>' +
+        jobsHtml +
+        (openJobs.length > 3 ? '<div style="font-size:.74rem;color:var(--muted);padding:3px 6px">+' + (openJobs.length-3) + ' more open jobs</div>' : '') +
+        '</div>' : '') +
+      '<div style="display:flex;gap:6px;margin-top:10px">' +
+      '<button onclick="event.stopPropagation();openNewJobForCustomer(\'' + c.id + '\')" style="flex:1;padding:6px;background:linear-gradient(135deg,var(--amber),var(--amber2));border:none;border-radius:8px;color:#fff;font-size:.76rem;font-weight:700;cursor:pointer">+ New Job</button>' +
+      '<button onclick="event.stopPropagation();openCustomerModal(\'' + c.id + '\')" style="padding:6px 10px;background:transparent;border:1px solid rgba(110,145,210,.2);border-radius:8px;color:var(--muted);font-size:.76rem;cursor:pointer">✏️ Edit</button>' +
+      '</div></div>';
   }).join('');
 }
 
@@ -10992,3 +11056,4 @@ window.loadRetrospective = loadRetrospective;
 conLoadFirebase();
 // Check for portal mode on every page load
 checkPortalMode();
+
