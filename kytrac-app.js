@@ -1,4 +1,4 @@
-// KYTRAC Application JavaScript v1.9.10 · 05/Jul/2026
+// KYTRAC Application JavaScript v1.9.11 · 05/Jul/2026
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -942,7 +942,7 @@ async function commitImport() {
   if (!_pendingImport || !_pendingImport.length || !conDb) return;
   const out = document.getElementById(_importResultId);
   const total = _pendingImport.length;
-  let done = 0, failed = 0;
+  let done = 0, failed = 0, firstError = '';
   if (out) out.innerHTML = '<div class="small muted">Applying… 0/' + total + '</div>';
 
   for (const u of _pendingImport) {
@@ -966,10 +966,26 @@ async function commitImport() {
         if (u.billCost!==undefined) j.billCost = u.billCost;
       }
       done++;
-    } catch(e) { failed++; }
-    if (out && done % 5 === 0) out.innerHTML = '<div class="small muted">Applying… ' + done + '/' + total + '</div>';
+    } catch(e) {
+      failed++;
+      if (!firstError) firstError = (e && e.message) ? e.message : String(e);
+    }
+    // Update every iteration so it never looks frozen
+    if (out) out.innerHTML = '<div class="small muted">Applying… ' + (done+failed) + '/' + total + (failed ? ' · ' + failed + ' failed' : '') + '</div>';
   }
-  if (out) out.innerHTML = '<div style="border:1px solid rgba(29,187,135,.3);background:rgba(29,187,135,.08);border-radius:10px;padding:14px"><div style="font-weight:800;color:#a3f2d2">✓ Import complete</div><div class="small muted" style="margin-top:4px">' + done + ' job(s) updated' + (failed?', '+failed+' failed':'') + '. Reopen any job to see refreshed financials.</div></div>';
+
+  if (out) {
+    if (done === 0 && failed > 0) {
+      out.innerHTML = '<div style="border:1px solid rgba(239,83,80,.35);background:rgba(239,83,80,.08);border-radius:10px;padding:14px">'
+        + '<div style="font-weight:800;color:#fca5a5">✗ Import failed — no jobs updated</div>'
+        + '<div class="small muted" style="margin-top:6px">All ' + failed + ' writes were rejected. This is almost always a Firestore permissions issue — your role may not have write access to jobs.</div>'
+        + '<div class="small" style="margin-top:6px;color:#fca5a5;font-family:monospace;word-break:break-word">' + esc(firstError || 'unknown error') + '</div></div>';
+    } else {
+      out.innerHTML = '<div style="border:1px solid rgba(29,187,135,.3);background:rgba(29,187,135,.08);border-radius:10px;padding:14px">'
+        + '<div style="font-weight:800;color:#a3f2d2">✓ Import complete</div>'
+        + '<div class="small muted" style="margin-top:4px">' + done + ' job(s) updated' + (failed?', '+failed+' failed ('+esc(firstError)+')':'') + '. Reopen any job to see refreshed financials.</div></div>';
+    }
+  }
   _pendingImport = null;
   if (conCurrentJobId) { const j = conJobs.find(x=>x.id===conCurrentJobId); if (j) refreshJobFinancials(j); }
 }
