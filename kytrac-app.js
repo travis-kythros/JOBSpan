@@ -1,4 +1,4 @@
-// KYTRAC Application JavaScript v1.9.11 · 05/Jul/2026
+// KYTRAC Application JavaScript v1.9.12 · 05/Jul/2026
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -1493,7 +1493,11 @@ function refreshJobFinancials(job) {
   const cv = getJobValue(job);
   const ec = job.estCost || 0;
   const ac = job.actualCost || 0;
-  const profit = cv - ec;
+  // Best-known cost for margin math: prefer real imported actualCost over a stale/manual estCost.
+  // (estCost with no estimate line items behind it is often a bare imported number — see syncJobEstimateCost.)
+  const hasRealActual = typeof job.actualCost === 'number' && job.actualCost > 0;
+  const bestCost = hasRealActual ? ac : ec;
+  const profit = cv - bestCost;
   const margin = cv ? (profit / cv * 100) : 0;
 
   // Collected: prefer the imported JobTread figure; fall back to in-app invoice payments.
@@ -1501,9 +1505,9 @@ function refreshJobFinancials(job) {
   const inAppCollected = jobInvs.reduce((s,i) => s + (i.amtPaid||0), 0);
   const collected = (typeof job.collected === 'number') ? job.collected : inAppCollected;
   const balance = cv - collected;
-  const costToComplete = Math.max(0, ec - ac);
-  const projProfit = cv - ec;
-  const projMargin = cv > 0 ? (projProfit / cv * 100) : 0;
+  const costToComplete = hasRealActual ? 0 : Math.max(0, ec - ac); // actualCost IS cost-to-date, nothing left to project without real estimate data
+  const projProfit = profit;
+  const projMargin = margin;
 
   const setFin = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = fmt(val); };
   // Top financial bar
@@ -1519,14 +1523,14 @@ function refreshJobFinancials(job) {
   setFin('dashFinApproved', cv);
   setFin('dashFinCollected', collected);
   setFin('dashFinBalance', balance);
-  setFin('dashFinCost', ec);
+  setFin('dashFinCost', bestCost);
   setFin('dashFinProfit', projProfit);
   const dashM = document.getElementById('dashFinMargin');
   if (dashM) dashM.textContent = projMargin.toFixed(1) + '%';
 
   // Financials tab est/actual block
   setFin('finContract', cv);
-  setFin('finEstCost', ec);
+  setFin('finEstCost', bestCost);
   setFin('finEstProfit', profit);
   const finM = document.getElementById('finEstMargin');
   if (finM) finM.textContent = margin.toFixed(1) + '%';
