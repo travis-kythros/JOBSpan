@@ -1,4 +1,4 @@
-// KYTRAC Application JavaScript v1.9.12 · 05/Jul/2026
+// JobSpan Application JavaScript v1.9.13 · 06/Jul/2026
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -256,7 +256,7 @@ function ktFilterJobs(q) {
   });
 }
 
-// ── OVERRIDE conShowMain to use new KYTRAC UI ──
+// ── OVERRIDE conShowMain to use new JobSpan UI ──
 function conShowMain(user) {
   document.getElementById('ktAuthWall').style.display = 'none';
   document.getElementById('ktApp').style.display = 'flex';
@@ -470,14 +470,14 @@ function conLoadFirebase() {
       console.error('Failed to load Firebase script:', scripts[i]);
       // Show error to user
       const loader = document.getElementById('conSignInLoading');
-      if (loader) loader.innerHTML = '<div style="color:#ef5350;font-size:.9rem">⚠️ Could not connect to KYTRAC.<br>Check your internet connection and reload.</div>';
+      if (loader) loader.innerHTML = '<div style="color:#ef5350;font-size:.9rem">⚠️ Could not connect to JobSpan.<br>Check your internet connection and reload.</div>';
     };
     document.head.appendChild(s);
   }
   loadNext(0);
 }
 
-// conShowAuthWall and conShowMain overridden by KYTRAC UI versions below
+// conShowAuthWall and conShowMain overridden by JobSpan UI versions below
 
 function conSignIn() {
   if (!conFirebaseReady) {
@@ -932,7 +932,7 @@ async function handleImportFiles(fileList, resultId) {
     html += '<div style="margin-top:12px"><button class="btn-amber" onclick="commitImport()" style="padding:9px 18px;font-weight:700">✓ Apply to ' + updates.length + ' job(s)</button>'
           + '<button class="btn" onclick="document.getElementById(_importResultId).innerHTML=\'\';_pendingImport=null" style="margin-left:8px;padding:9px 18px">Cancel</button></div>';
   } else {
-    html += '<div class="small" style="color:#fca5a5">No matching jobs. Confirm job numbers in KYTRAC match JobTread\'s.</div>';
+    html += '<div class="small" style="color:#fca5a5">No matching jobs. Confirm job numbers in JobSpan match your estimates.</div>';
   }
   html += '</div>';
   out.innerHTML = html;
@@ -998,7 +998,7 @@ function loadTeamCache() {
   if (!conDb) return;
   coll('settings').doc('team').get()
     .then(doc => {
-      const members = doc.exists ? (doc.data().members || {}) : {};
+      const members = doc.exists ? extractTeamMembers(doc.data()) : {};
       allTeamMembers = Object.values(members);
     })
     .catch(() => { allTeamMembers = []; });
@@ -4852,7 +4852,7 @@ function printInvoiceData(inv, job) {
 
     '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;text-align:center;color:#9ca3af;font-size:.75rem">' +
     (co.companyName||'') + (co.phone?' · '+co.phone:'') + (co.email?' · '+co.email:'') +
-    '<br>Powered by KYTRAC Construction Tracking' +
+    '<br>Powered by JobSpan Construction Tracking' +
     '</div>' +
     '<script>window.print();<\/script></body></html>');
   win.document.close();
@@ -4887,7 +4887,7 @@ function resolveCompany(user, callback) {
       if (!snap.empty) {
         // Found their company
         currentCompanyId = snap.docs[0].id;
-        console.log('KYTRAC: Loaded company', currentCompanyId);
+        console.log('JobSpan: Loaded company', currentCompanyId);
         if (callback) callback();
         return;
       }
@@ -4897,7 +4897,7 @@ function resolveCompany(user, callback) {
         .then(snap2 => {
           if (!snap2.empty) {
             currentCompanyId = snap2.docs[0].id;
-            console.log('KYTRAC: Joined company as member', currentCompanyId);
+            console.log('JobSpan: Joined company as member', currentCompanyId);
             if (callback) callback();
             return;
           }
@@ -4925,7 +4925,7 @@ function showCompanyOnboarding(user, callback) {
     onboarding.style.cssText = 'position:fixed;inset:0;background:#060e1e;display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px';
     onboarding.innerHTML = `
       <div style="background:rgba(8,18,36,.95);border:1px solid rgba(217,119,6,.4);border-radius:20px;padding:36px;max-width:480px;width:100%">
-        <div style="font-size:1.8rem;font-weight:900;color:#f59e0b;margin-bottom:6px">Welcome to KYTRAC</div>
+        <div style="font-size:1.8rem;font-weight:900;color:#f59e0b;margin-bottom:6px">Welcome to JobSpan</div>
         <div style="color:#94a3b8;font-size:.88rem;margin-bottom:28px">Let's set up your company to get started.</div>
         <label style="display:block;font-size:.78rem;color:#94a3b8;margin-bottom:5px">Company Name *</label>
         <input id="onboardCompanyName" placeholder="Jason Hudson Construction" style="width:100%;padding:12px 14px;background:rgba(8,19,37,.8);border:1px solid rgba(217,119,6,.3);border-radius:10px;color:#eaf0fb;font-size:.95rem;margin-bottom:16px;box-sizing:border-box" />
@@ -4972,7 +4972,7 @@ function createCompany(ownerEmail) {
   conDb.collection('companies').add(companyData)
     .then(ref => {
       currentCompanyId = ref.id;
-      console.log('KYTRAC: Created company', currentCompanyId);
+      console.log('JobSpan: Created company', currentCompanyId);
 
       // Also set up the settings/company doc with company profile
       return coll('settings').doc('company').set({
@@ -4998,6 +4998,22 @@ function createCompany(ownerEmail) {
 }
 window.createCompany = createCompany;
 
+// Returns the team members map regardless of whether they're nested under
+// `members` (current write path) or sitting at the top level of the team doc
+// (legacy/imported shape). Filters out non-member metadata fields.
+function extractTeamMembers(data) {
+  if (!data) return {};
+  if (data.members && typeof data.members === 'object') return data.members;
+  // Legacy shape: members are top-level fields on the team doc. Keep only
+  // entries that look like a member record (have an email or role).
+  const out = {};
+  Object.keys(data).forEach(k => {
+    const v = data[k];
+    if (v && typeof v === 'object' && (v.email || v.role)) out[k] = v;
+  });
+  return out;
+}
+
 function loadUserRole(user, callback) {
   if (!conDb) { currentUserRole = 'Owner'; if(callback) callback(); return; }
 
@@ -5017,7 +5033,7 @@ function loadUserRole(user, callback) {
         const roleElFirst = document.getElementById('ktUserRole');
         if (roleElFirst) { roleElFirst.textContent = 'Owner'; roleElFirst.style.color = KYTRAC_ROLES['Owner'].color; }
       } else {
-        const members = doc.data().members || {};
+        const members = extractTeamMembers(doc.data());
         const key = email.replace(/\./g,'_');
         if (members[key]) {
           currentUserRole = members[key].role || 'Field Technician';
@@ -5064,7 +5080,7 @@ function loadTeamMembers() {
 
   coll('settings').doc('team').get()
     .then(doc => {
-      const members = doc.exists ? (doc.data().members || {}) : {};
+      const members = doc.exists ? extractTeamMembers(doc.data()) : {};
       const memberList = Object.values(members).sort((a,b) => {
         const la = KYTRAC_ROLES[a.role]?.level || 0;
         const lb = KYTRAC_ROLES[b.role]?.level || 0;
@@ -5141,9 +5157,22 @@ function removeMember(key) {
   coll('settings').doc('team').get()
     .then(doc => {
       if (!doc.exists) return;
-      const members = doc.data().members || {};
+      const data = doc.data();
+      const members = { ...extractTeamMembers(data) };
       delete members[key];
-      return coll('settings').doc('team').update({ members });
+      // Write canonical nested shape.
+      const payload = { members };
+      // If this doc used the legacy top-level shape, null out the old
+      // top-level member fields so they don't shadow the nested map.
+      if (!data.members) {
+        Object.keys(data).forEach(k => {
+          const v = data[k];
+          if (v && typeof v === 'object' && (v.email || v.role)) {
+            payload[k] = firebase.firestore.FieldValue.delete();
+          }
+        });
+      }
+      return coll('settings').doc('team').update(payload);
     })
     .then(() => loadTeamMembers())
     .catch(e => alert('Error: ' + e.message));
@@ -5236,7 +5265,7 @@ function populateTodoAssigneeFilter() {
   if (!conDb) return;
   coll('settings').doc('team').get().then(doc => {
     if (!doc.exists) return;
-    const members = doc.data().members || {};
+    const members = extractTeamMembers(doc.data());
     const sel = document.getElementById('newTodoAssignee');
     if (!sel) return;
     sel.innerHTML = '<option value="">Unassigned</option>' +
@@ -6651,7 +6680,7 @@ async function handleDocUpload(input, context) {
 
       if (file.size > DOC_SIZE_LIMIT) {
         // Too large for Firestore — store metadata only with a warning
-        if (!confirm(`"${file.name}" is ${formatFileSize(file.size)}. Files over 500KB cannot be stored in KYTRAC yet. Store metadata only (no download)?`)) continue;
+        if (!confirm(`"${file.name}" is ${formatFileSize(file.size)}. Files over 500KB cannot be stored in JobSpan yet. Store metadata only (no download)?`)) continue;
         dataUrl = null;
       } else {
         dataUrl = await fileToBase64(file);
@@ -7033,7 +7062,7 @@ function populateCrewCheckboxes(selectedCrew) {
       container.innerHTML = '<div class="small muted" style="font-style:italic;grid-column:1/-1">No team members added yet. Add team members in Company Settings.</div>';
       return;
     }
-    const members = Object.values(doc.data().members || {})
+    const members = Object.values(extractTeamMembers(doc.data()))
       .sort((a,b) => (KYTRAC_ROLES[a.role]?.level||0) > (KYTRAC_ROLES[b.role]?.level||0) ? -1 : 1);
     if (!members.length) {
       container.innerHTML = '<div class="small muted" style="font-style:italic;grid-column:1/-1">No team members added yet.</div>';
@@ -7617,7 +7646,7 @@ function buildTeamColors() {
   if (!conDb) return;
   coll('settings').doc('team').get().then(doc => {
     if (!doc.exists) return;
-    const members = Object.values(doc.data().members || {});
+    const members = Object.values(extractTeamMembers(doc.data()));
     _teamColors = {};
     members.forEach((m, i) => {
       _teamColors[m.email] = CAL_USER_COLORS[i % CAL_USER_COLORS.length];
@@ -7724,7 +7753,7 @@ function openCalEventModal(id, prefilledDate) {
   const assignSel = document.getElementById('calEventAssignee');
   if (assignSel && conDb) {
     coll('settings').doc('team').get().then(doc => {
-      const members = doc.exists ? Object.values(doc.data().members || {}) : [];
+      const members = doc.exists ? Object.values(extractTeamMembers(doc.data())) : [];
       assignSel.innerHTML = '<option value="">Everyone (All Team)</option>' +
         members.map(m => {
           const color = _teamColors[m.email] || 'var(--amber)';
