@@ -1,4 +1,4 @@
-// JobSpan Application JavaScript v1.9.14 · 06/Jul/2026 (diagnostic)
+// JobSpan Application JavaScript v1.9.15 · 06/Jul/2026 (diagnostic)
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -5036,6 +5036,8 @@ function loadUserRole(user, callback) {
         const rawData = doc.data();
         const members = extractTeamMembers(rawData);
         const key = email.replace(/\./g,'_');
+        console.log('[JobSpan role] ►► READING PATH: companies/' + currentCompanyId + '/settings/team');
+        console.log('[JobSpan role] currentCompanyId =', currentCompanyId);
         console.log('[JobSpan role] login email:', email);
         console.log('[JobSpan role] lookup key:', key);
         console.log('[JobSpan role] raw team keys:', Object.keys(rawData));
