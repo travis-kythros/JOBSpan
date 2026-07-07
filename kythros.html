@@ -200,7 +200,7 @@
 <body>
 <div class="app">
   <div class="topbar">
-    <div class="brand"><h1>KYTHROS Workspace</h1><p id="buildVersionLine">Version 1.3.0 · 07/Jul/2026</p></div>
+    <div class="brand"><h1>KYTHROS Workspace</h1><p id="buildVersionLine">Version 1.3.1 · 07/Jul/2026</p></div>
     <div class="actions">
       <button class="btn" id="userBadge" onclick="openUserProfile()" style="display:inline-flex;align-items:center;gap:6px">👤 Set Profile</button>
       <div class="focus-toggle">
@@ -1328,6 +1328,15 @@ function toggleEisenAxis(id,axis){
   saveState();
   renderEisenhower(filteredTasks());
 }
+function moveTaskToQuadrant(id,quad){
+  const t=state.tasks.find(x=>x.id===id);if(!t)return;
+  if(quad==='q1'){t.urgent=true;t.important=true;}
+  else if(quad==='q2'){t.urgent=false;t.important=true;}
+  else if(quad==='q3'){t.urgent=true;t.important=false;}
+  else if(quad==='q4'){t.urgent=false;t.important=false;}
+  saveState();
+  renderEisenhower(filteredTasks());
+}
 function renderEisenhower(tasks){
   const grid=document.getElementById('eisenhowerBoard');if(!grid)return;
   const quads={q1:[],q2:[],q3:[],q4:[]};
@@ -1338,12 +1347,19 @@ function renderEisenhower(tasks){
   function card(t){
     const u=isTaskUrgent(t),i=isTaskImportant(t);
     const pColor=projectColor(t.project);
+    const curQuad=(u&&i)?'q1':(!u&&i)?'q2':(u&&!i)?'q3':'q4';
     return`<div style="background:rgba(10,22,45,.6);border:1px solid rgba(110,145,210,.15);border-radius:10px;padding:8px 10px;margin-bottom:8px;box-shadow:inset 3px 0 0 ${pColor}">
       <div style="font-weight:700;font-size:.85rem;cursor:pointer" onclick="openTask('${t.id}')">${esc(t.title)}</div>
       <div style="font-size:.72rem;color:var(--muted);margin:2px 0 6px">${esc(t.project||t.stream||'—')}${t.due?' · Due '+fmtDate(t.due):''}</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <button class="btn" style="font-size:.7rem;padding:3px 8px${u?';background:rgba(239,83,80,.18);border-color:rgba(239,83,80,.3);color:#ffb4b0':''}" onclick="toggleEisenAxis('${t.id}','urgent')">${u?'✓ Urgent':'Not urgent'}</button>
         <button class="btn" style="font-size:.7rem;padding:3px 8px${i?';background:rgba(29,187,135,.18);border-color:rgba(29,187,135,.3);color:#a3f2d2':''}" onclick="toggleEisenAxis('${t.id}','important')">${i?'✓ Important':'Not important'}</button>
+        <select onchange="moveTaskToQuadrant('${t.id}',this.value)" style="font-size:.7rem;padding:4px 6px;border-radius:8px;background:rgba(8,19,37,.85);color:var(--text);border:1px solid rgba(110,145,210,.25)">
+          <option value="q1" ${curQuad==='q1'?'selected':''}>🔥 Do First</option>
+          <option value="q2" ${curQuad==='q2'?'selected':''}>🎯 Schedule</option>
+          <option value="q3" ${curQuad==='q3'?'selected':''}>👥 Delegate</option>
+          <option value="q4" ${curQuad==='q4'?'selected':''}>🗑 Eliminate</option>
+        </select>
       </div>
     </div>`;
   }

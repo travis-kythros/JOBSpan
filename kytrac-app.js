@@ -1,4 +1,4 @@
-// JobSpan Application JavaScript v1.9.24 · 06/Jul/2026
+// JobSpan Application JavaScript v1.9.25 · 06/Jul/2026
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
