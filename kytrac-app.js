@@ -1,4 +1,4 @@
-// JobSpan Application JavaScript v1.9.20 · 06/Jul/2026
+// JobSpan Application JavaScript v1.9.22 · 06/Jul/2026
 
 
 const esc = s => ((s==null?'':s)).toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -12282,10 +12282,10 @@ function loadEpicTree(jobId) {
             const t = itemDoc.data();
             feature.tasks.push({
               id: itemDoc.id,
-              name: t.name || t.description || '(unnamed task)',
+              name: t.desc || t.name || t.description || '(unnamed task)',
               qty: t.qty || 0,
-              cost: t.cost || 0,
-              price: t.price || 0,
+              cost: t.unitCost || t.cost || 0,
+              price: t.unitPrice || t.price || 0,
               taskStatus: t.taskStatus || 'todo',
               assignedTo: t.assignedTo || null,
             });
@@ -12534,6 +12534,12 @@ function renderEpicBoard() {
 }
 window.renderEpicBoard = renderEpicBoard;
 
+function closeFeatureModal() {
+  kClose('featureDetailModal');
+  renderEpicBoard();
+}
+window.closeFeatureModal = closeFeatureModal;
+
 function openFeatureModal(epicId, epicName, feature) {
   _boardOpenFeature = { epicId, epicName, feature };
   document.getElementById('featureEpicName').textContent = '🗂️ ' + epicName;
@@ -12547,12 +12553,18 @@ function openFeatureModal(epicId, epicName, feature) {
 
   const warning = dependencyWarning(feature, _boardFeaturesById);
   const banner = document.getElementById('featureRequestBanner');
+  const suggestion = suggestedRequestedStatus(feature);
   if (warning) {
     banner.style.display = 'block';
     banner.innerHTML = '<div style="background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.3);border-radius:8px;padding:8px 12px;color:#f87171;font-size:.82rem">⚠ ' + esc(warning) + '</div>';
   } else if (feature.requestedStatus) {
     banner.style.display = 'block';
     banner.innerHTML = '<div style="background:rgba(217,119,6,.12);border:1px solid rgba(217,119,6,.3);border-radius:8px;padding:8px 12px;color:var(--amber);font-size:.82rem">⏳ ' + esc(feature.assignedTeamLead || 'A Team Lead') + ' requested moving this to <b>' + esc(feature.requestedStatus) + '</b>.</div>';
+  } else if (suggestion && isOwnerOrAdmin()) {
+    banner.style.display = 'block';
+    banner.innerHTML = '<div style="background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.3);border-radius:8px;padding:8px 12px;color:#34d399;font-size:.82rem;display:flex;align-items:center;justify-content:space-between;gap:10px">' +
+      '<span>✅ All tasks done — mark this Feature as complete?</span>' +
+      '<button class="btn-amber" style="padding:5px 12px;font-size:.78rem" onclick="commitBoardStatus(\'complete\')">Mark Complete</button></div>';
   } else {
     banner.style.display = 'none';
     banner.innerHTML = '';
@@ -12590,6 +12602,7 @@ function toggleBoardTask(taskId, checked) {
       const t = feature.tasks.find(x => x.id === taskId);
       if (t) t.taskStatus = checked ? 'done' : 'todo';
       renderFeatureTaskList(feature);
+      renderEpicBoard(); // keep the card's "x/y tasks done" count in sync live
       const suggestion = suggestedRequestedStatus(feature);
       if (suggestion && isOwnerOrAdmin()) {
         // Owner viewing it themselves — just show the option, don't auto-write.
