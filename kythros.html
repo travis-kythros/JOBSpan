@@ -200,7 +200,7 @@
 <body>
 <div class="app">
   <div class="topbar">
-    <div class="brand"><h1>KYTHROS Workspace</h1><p id="buildVersionLine">Version 1.2.0, 21/Jun/2026</p></div>
+    <div class="brand"><h1>KYTHROS Workspace</h1><p id="buildVersionLine">Version 1.3.0 · 07/Jul/2026</p></div>
     <div class="actions">
       <button class="btn" id="userBadge" onclick="openUserProfile()" style="display:inline-flex;align-items:center;gap:6px">👤 Set Profile</button>
       <div class="focus-toggle">
@@ -223,6 +223,7 @@
     <button class="tab" data-page="calendarPage" onclick="switchTab('calendarPage',this)">Calendar</button>
     <button class="tab" data-page="budgetPage" onclick="switchTab('budgetPage',this)">Budget</button>
     <button class="tab" data-page="recipesPage" onclick="switchTab('recipesPage',this)">Recipes</button>
+    <button class="tab" data-page="focusPage" onclick="switchTab('focusPage',this)">🎯 Focus</button>
     <button class="tab" data-page="kythyPage" onclick="switchTab('kythyPage',this)">✨ KYTHY</button>
   </div>
 
@@ -248,6 +249,15 @@
 
     <!-- Stat strip -->
     <div class="dash-stats" id="dashStats"></div>
+
+    <!-- Today's Big 3 -->
+    <div class="dash-section" id="big3Section" style="margin-bottom:16px">
+      <div class="dash-section-head">
+        <h3>🎯 Today's Big 3</h3>
+        <button class="btn" style="font-size:.75rem;padding:5px 10px" onclick="openBig3Picker()">Edit</button>
+      </div>
+      <div class="dash-section-body" id="dashBig3" style="flex-direction:row;flex-wrap:wrap"></div>
+    </div>
 
     <!-- Three-column body -->
     <div class="dash-body">
@@ -321,11 +331,12 @@
 
   <!-- ══════════════════════════════════════════════════ PROJECTS PAGE -->
   <section class="page" id="projectsPage">
-    <div class="card"><div class="card-body"><div class="filters"><input id="taskSearch" placeholder="Search tasks, notes, or tags" /><select id="projectFilter"></select><select id="statusFilter"></select><select id="priorityFilter"></select></div><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-top:10px"><div class="subtabs" id="projectViewTabs" style="margin-top:0"><button class="subtab active" data-view="ganttView" onclick="switchView('ganttView',this)">Gantt</button><button class="subtab" data-view="kanbanView" onclick="switchView('kanbanView',this)">Kanban</button><button class="subtab" data-view="listView" onclick="switchView('listView',this)">List</button></div><div style="display:flex;gap:8px"><button class="btn btn-primary" onclick="rebaseTasksToJune1()" style="font-size:.84rem">📅 Rebase to Jun 1</button><button class="btn" onclick="openManageProjects()" style="font-size:.84rem">⚙ Manage Projects</button></div></div></div></div>
+    <div class="card"><div class="card-body"><div class="filters"><input id="taskSearch" placeholder="Search tasks, notes, or tags" /><select id="projectFilter"></select><select id="statusFilter"></select><select id="priorityFilter"></select></div><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-top:10px"><div class="subtabs" id="projectViewTabs" style="margin-top:0"><button class="subtab active" data-view="ganttView" onclick="switchView('ganttView',this)">Gantt</button><button class="subtab" data-view="kanbanView" onclick="switchView('kanbanView',this)">Kanban</button><button class="subtab" data-view="listView" onclick="switchView('listView',this)">List</button><button class="subtab" data-view="eisenhowerView" onclick="switchView('eisenhowerView',this)">Eisenhower</button></div><div style="display:flex;gap:8px"><button class="btn btn-primary" onclick="rebaseTasksToJune1()" style="font-size:.84rem">📅 Rebase to Jun 1</button><button class="btn" onclick="openManageProjects()" style="font-size:.84rem">⚙ Manage Projects</button></div></div></div></div>
     <div class="grid grid-4" style="margin-top:16px"><div class="card stat"><div class="card-body"><div class="label">Visible Tasks</div><div class="value" id="statVisible">0</div></div></div><div class="card stat"><div class="card-body"><div class="label">Blocked</div><div class="value" id="statBlocked">0</div></div></div><div class="card stat"><div class="card-body"><div class="label">Overdue</div><div class="value" id="statOverdue">0</div></div></div><div class="card stat"><div class="card-body"><div class="label">Avg. Progress</div><div class="value" id="statProgress">0%</div></div></div></div>
     <div class="project-view active" id="ganttView" style="margin-top:16px"><div class="card"><div class="card-head"><div><h2>Gantt View</h2><p>Primary planning view with timeline, dependencies, milestones, and overdue visibility.</p></div></div><div class="card-body"><div class="gantt-wrap"><div class="gantt-grid" id="ganttGrid"></div></div></div></div></div>
     <div class="project-view" id="kanbanView" style="margin-top:16px"><div class="card"><div class="card-head"><div><h2>Kanban View</h2><p>Traditional left-to-right workflow view with Blocked lane.</p></div></div><div class="card-body"><div class="kanban" id="kanbanBoard"></div></div></div></div>
     <div class="project-view" id="listView" style="margin-top:16px"><div class="card"><div class="card-head"><div><h2>List View</h2><p>Bulk-friendly review of task metadata.</p></div></div><div class="card-body table-wrap"><table><thead><tr><th>Task</th><th>Stream</th><th>Project</th><th>Status</th><th>Priority</th><th>Start</th><th>Due</th><th>Assigned</th><th>Progress</th><th>Actions</th></tr></thead><tbody id="taskTableBody"></tbody></table></div></div></div>
+    <div class="project-view" id="eisenhowerView" style="margin-top:16px"><div class="card"><div class="card-head"><div><h2>Eisenhower Matrix</h2><p>Tap Urgent/Important to reclassify — quadrants sort automatically. Suggestions are pre-filled from priority and due date.</p></div></div><div class="card-body"><div id="eisenhowerBoard"></div></div></div></div>
   </section>
 
   <!-- ══════════════════════════════════════════════════ CALENDAR PAGE -->
@@ -514,6 +525,20 @@
   </section>
 
   <!-- ══════════════════════════════════════════════════ KYTHY PAGE -->
+  <!-- ══════════════════════════════════════════════════ FOCUS PAGE -->
+  <section class="page" id="focusPage">
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
+      <div class="card">
+        <div class="card-head"><div><h2>🎯 Quarterly Goals</h2><p>The handful of targets from the workbook, kept visible.</p></div><button class="btn btn-primary" onclick="openGoalForm()">+ Add Goal</button></div>
+        <div class="card-body" id="goalsList" style="display:flex;flex-direction:column;gap:10px"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h2>📝 Weekly Review</h2><p>Wins, bottlenecks, and next week's priorities.</p></div><button class="btn btn-primary" onclick="openWeeklyReviewForm()">+ New Review</button></div>
+        <div class="card-body" id="weeklyReviewList" style="display:flex;flex-direction:column;gap:10px"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="page" id="kythyPage">
     <div class="kythy-wrap">
       <div class="kythy-header">
@@ -721,6 +746,8 @@
 </div></div></div></div>
 
 <div id="recipeModal" class="modal-overlay"><div class="modal-box"><div class="modal-head"><h3 style="margin:0">Recipe</h3><button class="btn" id="closeRecipeModal" onclick="kClose('recipeModal')">Close</button></div><div class="modal-body"><div class="form-grid"><input id="recipeId" type="hidden" class="full" /><input id="recipeTitle" class="full" placeholder="Recipe title" /><input id="recipeServings" type="number" min="1" placeholder="Servings" /><input id="recipeTags" placeholder="Tags, comma separated" /><textarea id="recipeIngredients" class="full" placeholder="Ingredients — one per line, format: qty|unit|ingredient|category&#10;Example: 2|lb|ground beef|Meat"></textarea><textarea id="recipeInstructions" class="full" placeholder="Instructions"></textarea></div></div><div class="modal-foot"><button class="btn btn-danger" id="deleteRecipeBtn" onclick="deleteRecipe()">Delete</button><button class="btn btn-primary" id="saveRecipeBtn" onclick="saveRecipe()">Save Recipe</button></div></div></div>
+
+<div id="big3PickerModal" class="modal-overlay"><div class="modal-box" style="max-height:80vh;display:flex;flex-direction:column"><div class="modal-head" style="flex-shrink:0"><div><h3 style="margin:0">Set Today's Big 3</h3><p class="muted" style="margin:6px 0 0">Pick up to 3 tasks to focus on today.</p></div><button class="btn" onclick="kClose('big3PickerModal')">Close</button></div><div class="modal-body" style="overflow-y:auto;flex:1" id="big3PickerList"></div><div class="modal-foot"><button class="btn btn-primary" onclick="saveBig3()">Save</button></div></div></div>
 
 <script>
 const STORAGE_KEY='kythros-workspace-v8';
@@ -1077,6 +1104,8 @@ function loadState(){
     if(s.openingBalance===undefined)s.openingBalance=0;
     if(!s.debts)s.debts=clone(sampleData.debts);
     if(!s.budgetCategories)s.budgetCategories=clone(sampleData.budgetCategories);
+    if(!s.goals)s.goals=[];
+    if(!s.weeklyReviews)s.weeklyReviews=[];
     return s;
   }catch{return clone(sampleData);}
 }
@@ -1280,6 +1309,50 @@ function renderKanban(tasks){
     }).join('');
     return`<div class="column"><h4>${esc(status)}</h4>${items||'<div class="muted">No tasks here.</div>'}</div>`;
   }).join('');
+}
+
+function isTaskUrgent(t){
+  if(t.urgent!=null)return t.urgent;
+  if(t.milestone)return true;
+  if(!t.due)return false;
+  return t.due<=todayISO();
+}
+function isTaskImportant(t){
+  if(t.important!=null)return t.important;
+  return t.priority==='Critical'||t.priority==='High';
+}
+function toggleEisenAxis(id,axis){
+  const t=state.tasks.find(x=>x.id===id);if(!t)return;
+  const cur=axis==='urgent'?isTaskUrgent(t):isTaskImportant(t);
+  t[axis]=!cur;
+  saveState();
+  renderEisenhower(filteredTasks());
+}
+function renderEisenhower(tasks){
+  const grid=document.getElementById('eisenhowerBoard');if(!grid)return;
+  const quads={q1:[],q2:[],q3:[],q4:[]};
+  tasks.filter(t=>t.status!=='Done').forEach(t=>{
+    const u=isTaskUrgent(t),i=isTaskImportant(t);
+    if(u&&i)quads.q1.push(t);else if(!u&&i)quads.q2.push(t);else if(u&&!i)quads.q3.push(t);else quads.q4.push(t);
+  });
+  function card(t){
+    const u=isTaskUrgent(t),i=isTaskImportant(t);
+    const pColor=projectColor(t.project);
+    return`<div style="background:rgba(10,22,45,.6);border:1px solid rgba(110,145,210,.15);border-radius:10px;padding:8px 10px;margin-bottom:8px;box-shadow:inset 3px 0 0 ${pColor}">
+      <div style="font-weight:700;font-size:.85rem;cursor:pointer" onclick="openTask('${t.id}')">${esc(t.title)}</div>
+      <div style="font-size:.72rem;color:var(--muted);margin:2px 0 6px">${esc(t.project||t.stream||'—')}${t.due?' · Due '+fmtDate(t.due):''}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn" style="font-size:.7rem;padding:3px 8px${u?';background:rgba(239,83,80,.18);border-color:rgba(239,83,80,.3);color:#ffb4b0':''}" onclick="toggleEisenAxis('${t.id}','urgent')">${u?'✓ Urgent':'Not urgent'}</button>
+        <button class="btn" style="font-size:.7rem;padding:3px 8px${i?';background:rgba(29,187,135,.18);border-color:rgba(29,187,135,.3);color:#a3f2d2':''}" onclick="toggleEisenAxis('${t.id}','important')">${i?'✓ Important':'Not important'}</button>
+      </div>
+    </div>`;
+  }
+  grid.innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div class="card" style="background:rgba(239,83,80,.06);border:1px solid rgba(239,83,80,.25)"><div class="card-body"><h3 style="margin:0 0 4px;color:#ef5350">🔥 Do First</h3><p class="muted" style="font-size:.78rem;margin:0 0 10px">Urgent &amp; Important</p>${quads.q1.map(card).join('')||'<div class="muted" style="font-size:.8rem">Nothing here.</div>'}</div></div>
+    <div class="card" style="background:rgba(29,187,135,.06);border:1px solid rgba(29,187,135,.25)"><div class="card-body"><h3 style="margin:0 0 4px;color:#1dbb87">🎯 Schedule</h3><p class="muted" style="font-size:.78rem;margin:0 0 10px">Important, Not Urgent</p>${quads.q2.map(card).join('')||'<div class="muted" style="font-size:.8rem">Nothing here.</div>'}</div></div>
+    <div class="card" style="background:rgba(243,179,61,.06);border:1px solid rgba(243,179,61,.25)"><div class="card-body"><h3 style="margin:0 0 4px;color:#f3b33d">👥 Delegate</h3><p class="muted" style="font-size:.78rem;margin:0 0 10px">Urgent, Not Important</p>${quads.q3.map(card).join('')||'<div class="muted" style="font-size:.8rem">Nothing here.</div>'}</div></div>
+    <div class="card" style="background:rgba(152,167,196,.06);border:1px solid rgba(152,167,196,.2)"><div class="card-body"><h3 style="margin:0 0 4px;color:#98a7c4">🗑 Eliminate</h3><p class="muted" style="font-size:.78rem;margin:0 0 10px">Neither</p>${quads.q4.map(card).join('')||'<div class="muted" style="font-size:.8rem">Nothing here.</div>'}</div></div>
+  </div>`;
 }
 
 function renderList(tasks){
@@ -3182,7 +3255,7 @@ function clearSampleData(){
     tasks:[],events:[],notes:[],budget:[],recipes:[],
     mealPlans:{},grocery:[],
     familyMembers:clone(sampleData.familyMembers),
-    familyEvents:[],projects:[],archivedProjects:[]
+    familyEvents:[],projects:[],archivedProjects:[],goals:[],weeklyReviews:[]
   };
   selectedNoteId=null;
   selectedRecipeId=null;
@@ -3206,6 +3279,7 @@ function renderDashboard(){
   renderDashTasksToday();
   renderDashEventsToday();
   renderDashMealsToday();
+  renderBig3();
   // Refresh clock every 30s while on dashboard
   clearInterval(_dashClockTimer);
   _dashClockTimer=setInterval(function(){
@@ -3214,6 +3288,119 @@ function renderDashboard(){
     renderDashTasksToday();
     renderDashEventsToday();
   },30000);
+}
+
+// ── Today's Big 3 ──
+function renderBig3(){
+  const el=document.getElementById('dashBig3');if(!el)return;
+  const today=todayISO();
+  const big3=state.tasks.filter(t=>t.big3Date===today);
+  if(big3.length===0){
+    el.innerHTML='<div class="dash-empty">No Big 3 set for today.</div><div style="margin-top:10px;width:100%"><button class="btn btn-primary" style="width:100%;font-size:.83rem" onclick="openBig3Picker()">Set Today\'s Big 3 →</button></div>';
+    return;
+  }
+  el.innerHTML=big3.map(t=>`<div style="display:flex;align-items:center;gap:10px;background:rgba(10,22,45,.5);border-radius:10px;padding:10px 12px;flex:1;min-width:220px">
+    <input type="checkbox" ${t.status==='Done'?'checked':''} onchange="toggleBig3Done('${t.id}',this.checked)" style="width:18px;height:18px;flex-shrink:0" />
+    <div style="flex:1;cursor:pointer" onclick="openTask('${t.id}')"><div style="font-weight:700;font-size:.88rem${t.status==='Done'?';text-decoration:line-through;opacity:.5':''}">${esc(t.title)}</div><div style="font-size:.72rem;color:var(--muted)">${esc(t.project||t.stream||'—')}</div></div>
+  </div>`).join('');
+}
+function toggleBig3Done(id,checked){
+  const t=state.tasks.find(x=>x.id===id);if(!t)return;
+  t.status=checked?'Done':'To Do';if(checked)t.progress=100;
+  saveState();renderAll();
+}
+function openBig3Picker(){
+  const today=todayISO();
+  const open=state.tasks.filter(t=>t.status!=='Done').sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
+  const list=document.getElementById('big3PickerList');if(!list)return;
+  list.innerHTML=open.map(t=>`<label style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(110,145,210,.08);cursor:pointer">
+    <input type="checkbox" class="big3-pick" value="${t.id}" ${t.big3Date===today?'checked':''} style="width:18px;height:18px" onchange="enforceBig3Limit(this)" />
+    <span style="flex:1;font-size:.88rem">${esc(t.title)}</span>
+    <span style="font-size:.72rem;color:var(--muted)">${t.due?fmtDate(t.due):''}</span>
+  </label>`).join('')||'<div class="muted">No open tasks. Add a task first.</div>';
+  kOpen('big3PickerModal');
+}
+function enforceBig3Limit(changedEl){
+  const checked=[...document.querySelectorAll('.big3-pick:checked')];
+  if(checked.length>3){changedEl.checked=false;alert("Pick up to 3 tasks for today's Big 3.");}
+}
+function saveBig3(){
+  const today=todayISO();
+  const picked=new Set([...document.querySelectorAll('.big3-pick:checked')].map(el=>el.value));
+  state.tasks.forEach(t=>{
+    if(t.big3Date===today&&!picked.has(t.id))t.big3Date='';
+    if(picked.has(t.id))t.big3Date=today;
+  });
+  saveState();kClose('big3PickerModal');renderBig3();
+}
+
+// ── Quarterly Goals ──
+function renderGoals(){
+  const el=document.getElementById('goalsList');if(!el)return;
+  const goals=state.goals||[];
+  if(goals.length===0){el.innerHTML='<div class="muted">No goals yet. Add the targets from your workbook.</div>';return;}
+  el.innerHTML=goals.map(g=>`<div style="background:rgba(10,22,45,.5);border:1px solid rgba(110,145,210,.15);border-radius:12px;padding:12px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div style="font-weight:700;font-size:.92rem">${esc(g.text)}</div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn" style="font-size:.7rem;padding:3px 8px" onclick="openGoalForm('${g.id}')">Edit</button>
+        <button class="btn btn-danger" style="font-size:.7rem;padding:3px 8px" onclick="deleteGoal('${g.id}')">Delete</button>
+      </div>
+    </div>
+    <div style="font-size:.76rem;color:var(--muted);margin-top:4px">${esc(g.timeframe||'')}${g.target?' · '+esc(g.target):''}</div>
+  </div>`).join('');
+}
+function openGoalForm(id){
+  const g=id?(state.goals||[]).find(x=>x.id===id):null;
+  const text=prompt('Goal (e.g. "$15k consulting revenue this quarter")',g?g.text:'');
+  if(text===null||!text.trim())return;
+  const timeframe=prompt('Timeframe (e.g. Q3 2026)',g?g.timeframe:'');
+  if(timeframe===null)return;
+  const target=prompt('Target metric / $ (optional)',g?g.target:'');
+  if(target===null)return;
+  if(!state.goals)state.goals=[];
+  if(g){g.text=text.trim();g.timeframe=timeframe.trim();g.target=target.trim();}
+  else state.goals.push({id:uid('goal'),text:text.trim(),timeframe:timeframe.trim(),target:target.trim(),createdAt:new Date().toISOString()});
+  saveState();renderGoals();
+}
+function deleteGoal(id){
+  if(!confirm('Delete this goal?'))return;
+  state.goals=(state.goals||[]).filter(g=>g.id!==id);
+  saveState();renderGoals();
+}
+
+// ── Weekly Review ──
+function renderWeeklyReview(){
+  const el=document.getElementById('weeklyReviewList');if(!el)return;
+  const reviews=(state.weeklyReviews||[]).slice().sort((a,b)=>b.weekOf.localeCompare(a.weekOf));
+  if(reviews.length===0){el.innerHTML='<div class="muted">No reviews yet. Start your first weekly check-in.</div>';return;}
+  el.innerHTML=reviews.map(r=>`<div style="background:rgba(10,22,45,.5);border:1px solid rgba(110,145,210,.15);border-radius:12px;padding:12px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="font-weight:700;font-size:.88rem">Week of ${esc(r.weekOf)}</div>
+      <button class="btn btn-danger" style="font-size:.7rem;padding:3px 8px" onclick="deleteWeeklyReview('${r.id}')">Delete</button>
+    </div>
+    <div style="font-size:.8rem;margin-top:8px"><strong style="color:#1dbb87">Wins:</strong> ${esc(r.wins||'—')}</div>
+    <div style="font-size:.8rem;margin-top:6px"><strong style="color:#ef5350">Bottlenecks:</strong> ${esc(r.bottlenecks||'—')}</div>
+    <div style="font-size:.8rem;margin-top:6px"><strong style="color:#4d8dff">Next week:</strong> ${esc(r.nextWeek||'—')}</div>
+  </div>`).join('');
+}
+function openWeeklyReviewForm(){
+  const weekOf=prompt('Week of (e.g. '+weekStart()+')',weekStart());
+  if(weekOf===null||!weekOf.trim())return;
+  const wins=prompt('Wins — what went right this week?','');
+  if(wins===null)return;
+  const bottlenecks=prompt("What didn't get done, and why?",'');
+  if(bottlenecks===null)return;
+  const nextWeek=prompt('Priorities for next week?','');
+  if(nextWeek===null)return;
+  if(!state.weeklyReviews)state.weeklyReviews=[];
+  state.weeklyReviews.push({id:uid('review'),weekOf:weekOf.trim(),wins:wins.trim(),bottlenecks:bottlenecks.trim(),nextWeek:nextWeek.trim(),createdAt:new Date().toISOString()});
+  saveState();renderWeeklyReview();
+}
+function deleteWeeklyReview(id){
+  if(!confirm('Delete this review?'))return;
+  state.weeklyReviews=(state.weeklyReviews||[]).filter(r=>r.id!==id);
+  saveState();renderWeeklyReview();
 }
 
 function updateDashClock(){
@@ -3400,7 +3587,7 @@ function renderDashMealsToday(){
 }
 // ════════════════════════════════════════════════════
 
-function renderAll(){renderDashboard();renderFilters();const tasks=filteredTasks();renderStats(tasks);renderGantt(tasks);renderKanban(tasks);renderList(tasks);renderCalendar();renderBudget();renderNotesList();loadSelectedNoteIntoEditor();renderRecipes();renderGcalStatus();renderTimeline();renderFamilyPage();}
+function renderAll(){renderDashboard();renderFilters();const tasks=filteredTasks();renderStats(tasks);renderGantt(tasks);renderKanban(tasks);renderList(tasks);renderEisenhower(tasks);renderCalendar();renderBudget();renderNotesList();loadSelectedNoteIntoEditor();renderRecipes();renderGcalStatus();renderTimeline();renderFamilyPage();renderGoals();renderWeeklyReview();}
 
 // ════════════════════════════════════════════════════
 // ── TIMELINE SYSTEM ──
